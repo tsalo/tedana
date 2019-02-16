@@ -5,13 +5,15 @@ import logging
 import numpy as np
 from scipy import stats
 
+import aroma
+
 from tedana import utils
 from tedana.selection._utils import getelbow
 
 LGR = logging.getLogger(__name__)
 
 
-def selcomps(seldict, comptable, mmix, manacc, n_echos):
+def selcomps(seldict, comptable, mmix, manacc, n_echos, method='kundu'):
     """
     Classify components in seldict as "accepted," "rejected," "midk," or "ignored."
 
@@ -34,6 +36,8 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
         Comma-separated list of indices of manually accepted components
     n_echos : :obj:`int`
         Number of echos in original data
+    method : {'kundu', 'kundu+aroma', 'manual'}
+        Method!
 
     Returns
     -------
@@ -87,6 +91,8 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
 
     # If user has specified
     if manacc:
+        if method != 'manual':
+            LGR.info('Manually accepted components supplied. Overriding "method".')
         acc = sorted([int(vv) for vv in manacc.split(',')])
         rej = sorted(np.setdiff1d(all_comps, acc))
         comptable.loc[acc, 'classification'] = 'accepted'
@@ -96,6 +102,16 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
         comptable = comptable[[c for c in comptable if c not in cols_at_end] +
                               [c for c in cols_at_end if c in comptable]]
         return comptable
+
+    """
+    Let's do AROMA first!
+    """
+    if 'aroma' in method:
+        rej = aroma.classification(comptable['maxRPcorr'], comptable['edgeFract'],
+                                   comptable['HFC'], comptable['csfFract'])
+        acc = np.setdiff1d(acc, rej)
+        comptable.loc[rej, 'classification'] = 'rejected'
+        comptable.loc[rej, 'rationale'] += 'I101;'
 
     """
     Do some tallies for no. of significant voxels
@@ -160,13 +176,14 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
                            (comptable['countsigFR2'] > 0))]
     comptable.loc[temp_rej0, 'classification'] = 'rejected'
     comptable.loc[temp_rej0, 'rationale'] += 'I002;'
+    rej = np.union1d(temp_rej0, rej)
 
     temp_rej1 = all_comps[(comptable['dice_FS0'] > comptable['dice_FR2']) &
                           (comptable['variance explained'] >
                            np.median(comptable['variance explained']))]
     comptable.loc[temp_rej1, 'classification'] = 'rejected'
     comptable.loc[temp_rej1, 'rationale'] += 'I003;'
-    rej = np.union1d(temp_rej0, temp_rej1)
+    rej = np.union1d(temp_rej1, rej)
 
     temp_rej2 = acc[(comptable.loc[acc, 'signal-noise_t'] < 0) &
                     (comptable.loc[acc, 'variance explained'] >

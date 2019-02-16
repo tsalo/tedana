@@ -20,6 +20,29 @@ F_MAX = 500
 Z_MAX = 8
 
 
+def fit_aroma(comp_table, t2s, mask, mmix, betas, motpars, t_r, ref_img):
+    """
+    """
+    import aroma
+    csf_mask = t2s >= 80.
+    csf_mask = nib.Nifti1Image(csf_mask, ref_img.affine)
+    nonbrain_mask = 1 - mask
+    nonbrain_mask = nib.Nifti1Image(nonbrain_mask, ref_img.affine)
+    struc = nd.generate_binary_structure(3, 2)
+    eroded_mask = nd.binary_erosion(mask, structure=struc).astype(np.uint8)
+    edge_mask = brainmask_data - eroded_mask
+    edge_mask = nib.Nifti1Image(edge_mask, ref_img.affine)
+    betas = utils.unmask(betas, mask)
+    betas = nib.Nifti1Image(betas, ref_img.affine)
+
+    motpars = aroma.utils.load_motpars(motpars, source='auto')
+    comp_table['edgeFract'], comp_table['csfFract'] = aroma.feature_spatial(
+        betas, edge_mask, nonbrain_mask, csf_mask)
+    comp_table['maxRPcorr'] = aroma.feature_time_series(mmix, motpars)
+    comp_table['HFC'] = aroma.feature_frequency(ft_mmix, t_r)
+    return comp_table
+
+
 def fitmodels_direct(catd, mmix, mask, t2s, t2s_full, tes, combmode, ref_img,
                      reindex=False, mmixN=None, full_sel=True, label=None,
                      out_dir='.', verbose=False):
