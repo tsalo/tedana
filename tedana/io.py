@@ -267,7 +267,7 @@ def writefeats(data, mmix, mask, ref_img, suffix=''):
     """
 
     # write feature versions of components
-    feats = utils.unmask(model.computefeats2(data, mmix, mask), mask)
+    feats = utils.unmask(model.get_coeffs_and_zstats(data, mmix, mask)[0], mask)
     fname = filewrite(feats, 'feats_{0}'.format(suffix), ref_img)
 
     return fname
