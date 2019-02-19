@@ -185,16 +185,15 @@ def fitmodels_direct(catd, mmix, mask, t2s, t2s_full, tes, combmode, ref_img,
         F_R2_maps[:, i_comp] = F_R2
 
         # compute weights as Z-values
-        wtsZ = (WTS[:, i_comp] - WTS[:, i_comp].mean()) / WTS[:, i_comp].std()
-        wtsZ[np.abs(wtsZ) > Z_MAX] = (Z_MAX * (np.abs(wtsZ) / wtsZ))[
-            np.abs(wtsZ) > Z_MAX]
+        wtsZ = stats.zscore(WTS[:, i_comp])
+        # cap weights at Z_MAX
+        wtsZ[np.abs(wtsZ) > Z_MAX] = (Z_MAX * np.sign(wtsZ))[np.abs(wtsZ) > Z_MAX]
         Z_maps[:, i_comp] = wtsZ
+        norm_weights = wtsZ ** 2.
 
         # compute Kappa and Rho
         F_S0[F_S0 > F_MAX] = F_MAX
         F_R2[F_R2 > F_MAX] = F_MAX
-        norm_weights = np.abs(np.squeeze(
-            utils.unmask(wtsZ, mask)[t2s != 0]**2.))
         kappas[i_comp] = np.average(F_R2, weights=norm_weights)
         rhos[i_comp] = np.average(F_S0, weights=norm_weights)
 
