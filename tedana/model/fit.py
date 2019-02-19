@@ -428,8 +428,6 @@ def get_coeffs_and_zstats(data, mmix, mask, normalize=True):
 
     assert mmix.shape[0] == data.shape[-1]
     data = data[mask].T
-    print(mmix.shape)
-    print(data.shape)
     mmix -= np.mean(mmix, axis=0)
     data -= np.mean(data, axis=0)
 

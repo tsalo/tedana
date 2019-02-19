@@ -323,8 +323,6 @@ def tedpca(catd, OCcatd, combmode, mask, t2s, t2sG,
 
         # z-score mixing matrix over time
         vTmixN = stats.zscore(comp_ts, axis=1).T
-        #vTmix = comp_ts.T
-        #vTmixN = ((vTmix.T - vTmix.T.mean(0)) / vTmix.T.std(0)).T
         LGR.info('Making initial component selection guess from PCA results')
         _, ct_df, betasv, v_T = model.fitmodels_direct(
                     catd, comp_ts.T, eimum, t2s, t2sG, tes, combmode, ref_img,
