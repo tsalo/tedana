@@ -102,7 +102,8 @@ def fitmodels_direct(catd, mmix, mask, t2s, t2s_full, tes, combmode, ref_img,
     # compute un-normalized weight dataset (features)
     if mmixN is None:
         mmixN = mmix
-    WTS = computefeats2(utils.unmask(tsoc, mask), mmixN, mask, normalize=False)
+
+    betas_, WTS = get_coeffs_and_zstats(utils.unmask(tsoc, mask), mmixN, mask, normalize=False)
 
     # compute PSC dataset - shouldn't have to refit data
     tsoc_B = get_coeffs(tsoc_dm, mmix, mask=None)
@@ -291,64 +292,6 @@ def fitmodels_direct(catd, mmix, mask, t2s, t2s_full, tes, combmode, ref_img,
     return seldict, comptab, betas, mmix_new
 
 
-def computefeats2(data, mmix, mask, normalize=True):
-    """
-    Converts `data` to component space using `mmix`
-
-    Parameters
-    ----------
-    data : (S x T) array_like
-        Input data
-    mmix : (T [x C]) array_like
-        Mixing matrix for converting input data to component space, where `C`
-        is components and `T` is the same as in `data`
-    mask : (S,) array_like
-        Boolean mask array
-    normalize : bool, optional
-        Whether to z-score output. Default: True
-
-    Returns
-    -------
-    data_Z : (S x C) :obj:`numpy.ndarray`
-        Data in component space
-    """
-    if data.ndim != 2:
-        raise ValueError('Parameter data should be 2d, not {0}d'.format(data.ndim))
-    elif mmix.ndim not in [2]:
-        raise ValueError('Parameter mmix should be 2d, not '
-                         '{0}d'.format(mmix.ndim))
-    elif mask.ndim != 1:
-        raise ValueError('Parameter mask should be 1d, not {0}d'.format(mask.ndim))
-    elif data.shape[0] != mask.shape[0]:
-        raise ValueError('First dimensions (number of samples) of data ({0}) '
-                         'and mask ({1}) do not match.'.format(data.shape[0],
-                                                               mask.shape[0]))
-    elif data.shape[1] != mmix.shape[0]:
-        raise ValueError('Second dimensions (number of volumes) of data ({0}) '
-                         'and mmix ({1}) do not match.'.format(data.shape[0],
-                                                               mmix.shape[0]))
-
-    # demean masked data
-    data_vn = stats.zscore(data[mask], axis=-1)
-
-    # get betas of `data`~`mmix` and limit to range [-0.999, 0.999]
-    data_R = get_coeffs(data_vn, mmix, mask=None)
-    data_R[data_R < -0.999] = -0.999
-    data_R[data_R > 0.999] = 0.999
-
-    # R-to-Z transform
-    data_Z = np.arctanh(data_R)
-    if data_Z.ndim == 1:
-        data_Z = np.atleast_2d(data_Z).T
-
-    # normalize data
-    if normalize:
-        data_Zm = stats.zscore(data_Z, axis=0)
-        data_Z = data_Zm + (data_Z.mean(axis=0, keepdims=True) /
-                            data_Z.std(axis=0, keepdims=True))
-    return data_Z
-
-
 def get_coeffs(data, X, mask=None, add_const=False):
     """
     Performs least-squares fit of `X` against `data`
@@ -406,6 +349,112 @@ def get_coeffs(data, X, mask=None, add_const=False):
         betas = utils.unmask(betas, mask)
 
     return betas
+
+
+def t_to_z(t_values, dof):
+    """
+    From Vanessa Sochat's TtoZ package.
+    """
+    # Select just the nonzero voxels
+    nonzero = t_values[t_values != 0]
+
+    # We will store our results here
+    z_values = np.zeros(len(nonzero))
+
+    # Select values less than or == 0, and greater than zero
+    c = np.zeros(len(nonzero))
+    k1 = (nonzero <= c)
+    k2 = (nonzero > c)
+
+    # Subset the data into two sets
+    t1 = nonzero[k1]
+    t2 = nonzero[k2]
+
+    # Calculate p values for <=0
+    p_values_t1 = stats.t.cdf(t1, df=dof)
+    z_values_t1 = stats.norm.ppf(p_values_t1)
+    z_values_t1[np.isinf(z_values_t1)] = stats.norm.ppf(1e-16)
+
+    # Calculate p values for > 0
+    p_values_t2 = stats.t.cdf(-t2, df=dof)
+    z_values_t2 = -stats.norm.ppf(p_values_t2)
+    z_values_t2[np.isinf(z_values_t2)] = -stats.norm.ppf(1e-16)
+    z_values[k1] = z_values_t1
+    z_values[k2] = z_values_t2
+
+    # Write new image to file
+    out = np.zeros(t_values.shape)
+    out[t_values != 0] = z_values
+    return out
+
+
+def get_coeffs_and_zstats(data, mmix, mask, normalize=True):
+    """
+    Converts `data` to component space using `mmix`.
+
+    Parameters
+    ----------
+    data : (S x T) array_like
+        Input data
+    mmix : (T [x C]) array_like
+        Mixing matrix for converting input data to component space, where `C`
+        is components and `T` is the same as in `data`.
+        1D mmix not currently supported.
+    mask : (S,) array_like
+        Boolean mask array
+    normalize : bool, optional
+        Whether to variance-normalize output z-value maps. Default: True
+
+    Notes
+    -----
+    Calculation of t-statistics from https://stackoverflow.com/a/42677750/2589328
+    """
+    if data.ndim != 2:
+        raise ValueError('Parameter data should be 2d, not {0}d'.format(data.ndim))
+    elif mmix.ndim not in [2]:
+        raise ValueError('Parameter mmix should be 2d, not {0}d'.format(mmix.ndim))
+    elif mask.ndim != 1:
+        raise ValueError('Parameter mask should be 1d, not {0}d'.format(mask.ndim))
+    elif data.shape[0] != mask.shape[0]:
+        raise ValueError('First dimensions (number of samples) of data ({0}) '
+                         'and mask ({1}) do not match.'.format(data.shape[0],
+                                                               mask.shape[0]))
+    elif data.shape[1] != mmix.shape[0]:
+        raise ValueError('Second dimensions (number of volumes) of data ({0}) '
+                         'and mmix ({1}) do not match.'.format(data.shape[0],
+                                                               mmix.shape[0]))
+    assert mmix.ndim == 2
+    if data.ndim != 2:
+        data = data[None, :]
+
+    assert mmix.shape[0] == data.shape[-1]
+    data = data[mask].T
+    print(mmix.shape)
+    print(data.shape)
+    mmix -= np.mean(mmix, axis=0)
+    data -= np.mean(data, axis=0)
+
+    slopes, _, _, _ = np.linalg.lstsq(mmix, data, rcond=None)
+    df = float(mmix.shape[0] - (mmix.shape[1] + 1))
+
+    # Override degrees of freedom if they're too low or negative
+    if df < 1:
+        df = 1
+    pred = np.dot(mmix, slopes)
+
+    # (N DVs, 1)
+    MSE = np.sum((data - pred) ** 2, axis=0) / df
+    MSE = np.atleast_2d(MSE).T
+
+    # (N DVs, N IVs)
+    var_b = np.dot(MSE,
+                   np.atleast_2d(np.linalg.inv(np.dot(mmix.T, mmix)).diagonal()))
+    sd_b = np.sqrt(var_b)
+    slopes = slopes.T
+    tstats = slopes / sd_b
+    zstats = t_to_z(tstats, df)
+    zstats[np.isnan(zstats)] = 0.
+    return slopes, zstats
 
 
 def gscontrol_raw(catd, optcom, n_echos, ref_img, dtrank=4):
