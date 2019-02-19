@@ -303,7 +303,7 @@ def tedpca(catd, OCcatd, combmode, mask, t2s, t2sG,
         if method == 'mle':
             voxel_comp_weights, varex, comp_ts = run_mlepca(dz)
         else:
-            ppca = PCA()
+            ppca = PCA(n_components=dz.shape[-1] - 1)
             ppca.fit(dz)
             comp_ts = ppca.components_
             varex = ppca.explained_variance_
