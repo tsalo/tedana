@@ -408,7 +408,7 @@ def tedica(n_components, dd, fixed_seed):
 
     Returns
     -------
-    mmix : (C x T) :obj:`numpy.ndarray`
+    mmix : (T x C) :obj:`numpy.ndarray`
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `dd`
 
@@ -435,7 +435,9 @@ def tedica(n_components, dd, fixed_seed):
 
         w = list(filter(lambda i: issubclass(i.category, UserWarning), w))
         if len(w):
-            LGR.warning('ICA failed to converge')
+            LGR.warning('ICA failed to converge in {0} iterations'.format(ica.n_iter_))
+        else:
+            LGR.debug('ICA converged in {0} iterations'.format(ica.n_iter_))
 
     mmix = ica.mixing_
     mmix = stats.zscore(mmix, axis=0)
