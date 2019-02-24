@@ -113,7 +113,6 @@ ignored            Low-variance components ignored in denoised, but not
 
 TEDPCA codes
 ````````````
-
 =====  ===============  ========================================================
 Code   Classification   Description
 =====  ===============  ========================================================
@@ -146,6 +145,8 @@ I008   rejected         Artifact candidate type A
 I009   rejected         Artifact candidate type B
 I010   ignored          ign_add0
 I011   ignored          ign_add1
+I101   rejected         AROMA spatial artifact
+I102   rejected         AROMA frequency artifact
 =====  ===============  ========================================================
 
 Visual reports

@@ -11,7 +11,7 @@ from tedana.selection._utils import getelbow
 LGR = logging.getLogger(__name__)
 
 
-def selcomps(seldict, comptable, mmix, manacc, n_echos):
+def selcomps(seldict, comptable, mmix, manacc, n_echos, method='kundu'):
     """
     Classify components in seldict as "accepted," "rejected," "midk," or "ignored."
 
@@ -34,6 +34,8 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
         Comma-separated list of indices of manually accepted components
     n_echos : :obj:`int`
         Number of echos in original data
+    method : {'kundu', 'kundu+aroma', 'manual'}
+        Method!
 
     Returns
     -------
@@ -82,11 +84,14 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
     # List of components
     midk = []
     ign = []
+    rej = []
     all_comps = np.arange(comptable.shape[0])
     acc = np.arange(comptable.shape[0])
 
     # If user has specified
     if manacc:
+        if method != 'manual':
+            LGR.info('Manually accepted components supplied. Overriding "method".')
         acc = sorted([int(vv) for vv in manacc.split(',')])
         rej = sorted(np.setdiff1d(all_comps, acc))
         comptable.loc[acc, 'classification'] = 'accepted'
@@ -160,13 +165,14 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
                            (comptable['countsigFR2'] > 0))]
     comptable.loc[temp_rej0, 'classification'] = 'rejected'
     comptable.loc[temp_rej0, 'rationale'] += 'I002;'
+    rej = np.union1d(temp_rej0, rej)
 
     temp_rej1 = all_comps[(comptable['dice_FS0'] > comptable['dice_FR2']) &
                           (comptable['variance explained'] >
                            np.median(comptable['variance explained']))]
     comptable.loc[temp_rej1, 'classification'] = 'rejected'
     comptable.loc[temp_rej1, 'rationale'] += 'I003;'
-    rej = np.union1d(temp_rej0, temp_rej1)
+    rej = np.union1d(temp_rej1, rej)
 
     temp_rej2 = acc[(comptable.loc[acc, 'signal-noise_t'] < 0) &
                     (comptable.loc[acc, 'variance explained'] >
@@ -321,6 +327,24 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos):
         comptable.loc[ign_add1, 'rationale'] += 'I011;'
         ign = np.union1d(ign, ign_add1)
         acc = np.setdiff1d(acc, np.union1d(midk, ign))
+
+    """
+    Let's do AROMA last!
+    Doing it first seems to mess up the decision tree.
+    """
+    if 'aroma' in method:
+        thr_csf = 0.10
+        orig_poss = 0.0082
+        thr_HFC = 0.35
+        spat_rej = all_comps[comptable['csfFract'] > thr_csf]
+        freq_rej = all_comps[comptable['HFC'] > thr_HFC]
+        comptable.loc[spat_rej, 'classification'] = 'rejected'
+        comptable.loc[spat_rej, 'rationale'] += 'I101;'
+        comptable.loc[freq_rej, 'classification'] = 'rejected'
+        comptable.loc[freq_rej, 'rationale'] += 'I102;'
+        rej = np.union1d(rej, spat_rej)
+        rej = np.union1d(rej, freq_rej)
+        acc = np.setdiff1d(acc, rej)
 
     # Move decision columns to end
     comptable = comptable[[c for c in comptable if c not in cols_at_end] +

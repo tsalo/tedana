@@ -17,6 +17,7 @@ from datetime import datetime
 import argparse
 import numpy as np
 import pandas as pd
+import nibabel as nib
 from scipy import stats
 
 from tedana.workflows.parser_utils import is_valid_file
@@ -129,6 +130,11 @@ def _get_parser():
                           help='Method with which to select components in TEDPCA',
                           choices=['mle', 'kundu', 'kundu-stabilize'],
                           default='mle')
+    optional.add_argument('--tedica',
+                          dest='tedica',
+                          help='Method with which to select components in TEDICA',
+                          choices=['kundu', 'kundu+aroma', 'manual'],
+                          default='kundu')
     optional.add_argument('--out-dir',
                           dest='out_dir',
                           type=str,
@@ -156,8 +162,8 @@ def _get_parser():
 
 
 def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
-                    tedort=False, gscontrol=None, tedpca='mle',
-                    ste=-1, combmode='t2s', verbose=False, stabilize=False,
+                    tedort=False, gscontrol=None, tedpca='mle', tedica='kundu',
+                    ste=-1, combmode='t2s', verbose=False,
                     wvpca=False, out_dir='.', fixed_seed=42, debug=False,
                     quiet=False):
     """
@@ -190,6 +196,8 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
         is None.
     tedpca : {'mle', 'kundu', 'kundu-stabilize'}, optional
         Method with which to select components in TEDPCA. Default is 'mle'.
+    tedica : {'kundu', 'kundu+aroma', 'manual'}, optional
+        Method with which to select components in TEDPCA. Default is 'kundu'.
     ste : :obj:`int`, optional
         Source TEs for models. 0 for all, -1 for optimal combination.
         Default is -1.
@@ -256,6 +264,8 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
     LGR.info('Loading input data: {}'.format([f for f in data]))
     catd, ref_img = io.load_data(data, n_echos=n_echos)
     n_samp, n_echos, n_vols = catd.shape
+    img = nib.load(data[0])
+    t_r = img.header.get_zooms()[-1]
     LGR.debug('Resulting data shape: {}'.format(catd.shape))
 
     if mixm is not None and op.isfile(mixm):
@@ -278,6 +288,7 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
 
     mask, masksum = utils.make_adaptive_mask(catd, mask=mask,
                                              minimum=False, getsum=True)
+
     LGR.debug('Retaining {}/{} samples'.format(mask.sum(), n_samp))
     if verbose:
         io.filewrite(masksum, op.join(out_dir, 'adaptive_mask.nii'), ref_img)
@@ -335,8 +346,15 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
                     verbose=verbose)
         np.savetxt(op.join(out_dir, 'meica_mix.1D'), mmix)
 
+        if 'aroma' in tedica:
+            tsoc_betas = model.computefeats2(data_oc, mmix, mask, normalize=True)
+            tsoc_betas[tsoc_betas < 0] = 0
+            tsoc_betas = utils.unmask(tsoc_betas, mask)
+            comptable = model.fit_aroma(comptable, t2s, mask, mmix, tsoc_betas,
+                                        t_r, ref_img)
+
         comptable = selection.selcomps(seldict, comptable, mmix, manacc,
-                                       n_echos)
+                                       n_echos, method=tedica)
     else:
         LGR.info('Using supplied mixing matrix from ICA')
         mmix_orig = np.loadtxt(op.join(out_dir, 'meica_mix.1D'))
