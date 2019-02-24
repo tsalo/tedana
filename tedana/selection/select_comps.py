@@ -5,8 +5,6 @@ import logging
 import numpy as np
 from scipy import stats
 
-import aroma
-
 from tedana import utils
 from tedana.selection._utils import getelbow
 
@@ -86,6 +84,7 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos, method='kundu'):
     # List of components
     midk = []
     ign = []
+    rej = []
     all_comps = np.arange(comptable.shape[0])
     acc = np.arange(comptable.shape[0])
 
@@ -102,16 +101,6 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos, method='kundu'):
         comptable = comptable[[c for c in comptable if c not in cols_at_end] +
                               [c for c in cols_at_end if c in comptable]]
         return comptable
-
-    """
-    Let's do AROMA first!
-    """
-    if 'aroma' in method:
-        rej = aroma.classification(comptable['maxRPcorr'], comptable['edgeFract'],
-                                   comptable['HFC'], comptable['csfFract'])
-        acc = np.setdiff1d(acc, rej)
-        comptable.loc[rej, 'classification'] = 'rejected'
-        comptable.loc[rej, 'rationale'] += 'I101;'
 
     """
     Do some tallies for no. of significant voxels
@@ -338,6 +327,24 @@ def selcomps(seldict, comptable, mmix, manacc, n_echos, method='kundu'):
         comptable.loc[ign_add1, 'rationale'] += 'I011;'
         ign = np.union1d(ign, ign_add1)
         acc = np.setdiff1d(acc, np.union1d(midk, ign))
+
+    """
+    Let's do AROMA last!
+    Doing it first seems to mess up the decision tree.
+    """
+    if 'aroma' in method:
+        thr_csf = 0.10
+        orig_poss = 0.0082
+        thr_HFC = 0.35
+        spat_rej = all_comps[comptable['csfFract'] > thr_csf]
+        freq_rej = all_comps[comptable['HFC'] > thr_HFC]
+        comptable.loc[spat_rej, 'classification'] = 'rejected'
+        comptable.loc[spat_rej, 'rationale'] += 'I101;'
+        comptable.loc[freq_rej, 'classification'] = 'rejected'
+        comptable.loc[freq_rej, 'rationale'] += 'I102;'
+        rej = np.union1d(rej, spat_rej)
+        rej = np.union1d(rej, freq_rej)
+        acc = np.setdiff1d(acc, rej)
 
     # Move decision columns to end
     comptable = comptable[[c for c in comptable if c not in cols_at_end] +

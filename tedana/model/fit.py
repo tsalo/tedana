@@ -6,13 +6,15 @@ import os.path as op
 
 import numpy as np
 import pandas as pd
-from scipy import stats
+import nibabel as nib
+from scipy import stats, ndimage
 from scipy.special import lpmv
 import nilearn.image as niimg
 from nilearn._utils import check_niimg
 from nilearn.regions import connected_regions
 
 from tedana import (combine, io, utils)
+from tedana.due import due, Doi
 
 LGR = logging.getLogger(__name__)
 
@@ -20,27 +22,183 @@ F_MAX = 500
 Z_MAX = 8
 
 
-def fit_aroma(comp_table, t2s, mask, mmix, betas, motpars, t_r, ref_img):
+@due.dcite(Doi('10.1016/j.neuroimage.2015.02.064'),
+           description='AROMA feature calculation and component selection '
+                       'adapted from version 0.4.4-beta of ICA-AROMA.')
+def _aroma_feature_frequency(ft_data, freqs, TR):
     """
-    """
-    import aroma
-    csf_mask = t2s >= 80.
-    csf_mask = nib.Nifti1Image(csf_mask, ref_img.affine)
-    nonbrain_mask = 1 - mask
-    nonbrain_mask = nib.Nifti1Image(nonbrain_mask, ref_img.affine)
-    struc = nd.generate_binary_structure(3, 2)
-    eroded_mask = nd.binary_erosion(mask, structure=struc).astype(np.uint8)
-    edge_mask = brainmask_data - eroded_mask
-    edge_mask = nib.Nifti1Image(edge_mask, ref_img.affine)
-    betas = utils.unmask(betas, mask)
-    betas = nib.Nifti1Image(betas, ref_img.affine)
+    This function extracts the high-frequency content feature scores.
+    It determines the frequency, as fraction of the Nyquist frequency,
+    at which the higher and lower frequencies explain half
+    of the total power between 0.01Hz and Nyquist.
 
-    motpars = aroma.utils.load_motpars(motpars, source='auto')
-    comp_table['edgeFract'], comp_table['csfFract'] = aroma.feature_spatial(
+    Parameters
+    ---------------------------------------------------------------------------------
+    ft_data : (F x C) :obj:`numpy.ndarray`
+        Fourier-transformed ICA component time series. Component by frequency array.
+    TR : :obj:`float`
+        TR in seconds of data
+
+    Returns
+    ---------------------------------------------------------------------------------
+    HFC : (C,) :obj:`numpy.ndarray`
+        Array of the HFC ('high-frequency content') feature scores for the
+        components of the ft_data array
+    """
+    # Determine sample frequency
+    Fs = 1 / TR
+
+    # Determine Nyquist-frequency
+    Ny = Fs / 2
+
+    # Only include frequencies higher than 0.01Hz
+    fincl = np.squeeze(np.array(np.where(freqs > 0.01)))
+    ft_data = ft_data[fincl, :]
+    freqs = freqs[fincl]
+
+    # Set frequency range to [0-1]
+    f_norm = (freqs - 0.01) / (Ny - 0.01)
+
+    # For every IC; get the cumulative sum as a fraction of the total sum
+    fcumsum_fract = np.cumsum(ft_data, axis=0) / np.sum(ft_data, axis=0)
+
+    # Determine the index of the frequency with the fractional cumulative sum closest to 0.5
+    idx_cutoff = np.argmin(np.abs(fcumsum_fract - 0.5), axis=0)
+
+    # Now get the fractions associated with those indices index, these are the final feature scores
+    HFC = f_norm[idx_cutoff]
+
+    # Return feature score
+    return HFC
+
+
+@due.dcite(Doi('10.1016/j.neuroimage.2015.02.064'),
+           description='AROMA feature calculation and component selection '
+                       'adapted from version 0.4.4-beta of ICA-AROMA.')
+def _aroma_feature_spatial(z_maps, csf_mask, out_mask, edge_mask):
+    """
+    This function extracts the spatial feature scores. For each IC it
+    determines the fraction of the mixture modeled thresholded Z-maps
+    respectively located within the CSF or at the brain edges, using predefined
+    standardized masks.
+
+    Parameters
+    ----------
+    z_maps : (X x Y x Z x C) :obj:`numpy.ndarray`
+        Array containing mixture-modeled thresholded (p>0.5) z-maps
+    csf_mask, out_mask, edge_mask : (X x Y x Z) :obj:`numpy.ndarray`
+        Masks of CSF, nonbrain, and brain edges
+
+    Returns
+    -------
+    edgeFract : (C,) :obj:`numpy.ndarray`
+        Array of the edge fraction feature scores for the components of the
+        melIC file
+    csfFract : (C,) :obj:`numpy.ndarray`
+        Array of the CSF fraction feature scores for the components of the
+        melIC file
+    """
+    n_components = z_maps.shape[-1]
+
+    # Loop over ICs
+    edge_fract = np.zeros(n_components)
+    csf_fract = np.zeros(n_components)
+    for i_comp in range(n_components):
+        comp_map = z_maps[..., i_comp]
+        z_total_sum = np.sum(comp_map)
+        if z_total_sum == 0:
+            LGR.warning('The spatial map of component {0} is empty. Please '
+                        'check!'.format(i_comp))
+
+        csf_data = comp_map[csf_mask]
+        z_csf_sum = np.sum(csf_data)
+
+        edge_data = comp_map[edge_mask]
+        z_edge_sum = np.sum(edge_data)
+
+        out_data = comp_map[out_mask]
+        z_out_sum = np.sum(out_data)
+
+        # Determine edge and CSF fraction
+        if z_total_sum != 0:
+            edge_fract[i_comp] = (z_out_sum + z_edge_sum) / (z_total_sum - z_csf_sum)
+            csf_fract[i_comp] = z_csf_sum / z_total_sum
+        else:
+            edge_fract[i_comp] = 0.
+            csf_fract[i_comp] = 0.
+
+    return edge_fract, csf_fract
+
+
+@due.dcite(Doi('10.1016/j.neuroimage.2015.02.064'),
+           description='AROMA feature calculation and component selection '
+                       'adapted from version 0.4.4-beta of ICA-AROMA.')
+def fit_aroma(comp_table, t2s, mask, mmix, betas, t_r, ref_img):
+    """
+    Compute 3/4 AROMA metrics.
+
+    Parameters
+    ----------
+    comp_table : :obj:`pandas.DataFrame`
+    t2s : (S x T) :obj:`numpy.ndarray`
+    mask : (S,) :obj:`numpy.ndarray`
+    mmix : (C x T) :obj:`numpy.ndarray`
+    betas : (S x C) :obj:`numpy.ndarray`
+    t_r : :obj:`float`
+    ref_img : :obj:`nibabel.Nifti1.Nifti1Image`
+
+    Returns
+    -------
+    comp_table : :obj:`pandas.DataFrame`
+        Component table with new metrics
+    """
+    mask_3d = io.new_nii_like(ref_img, mask.astype(int)).get_data().astype(bool)
+
+    # Mask of CSF from T2* map
+    csf_mask = (t2s >= 80.).astype(int)
+    csf_mask = io.new_nii_like(ref_img, csf_mask).get_data().astype(bool)
+
+    # Mask of voxels outside of brain
+    nonbrain_mask = (1 - mask_3d).astype(bool)
+
+    # Mask of brain edges
+    struc = ndimage.generate_binary_structure(3, 2)
+    eroded_mask = ndimage.binary_erosion(mask_3d, structure=struc).astype(np.uint8)
+    edge_mask = (mask_3d - eroded_mask).astype(bool)
+
+    # Component z-statistic maps
+    betas = io.new_nii_like(ref_img, betas).get_data()
+
+    # Compute power spectra
+    ft_mmix, freqs = get_spectrum(mmix.T, tr=t_r)
+
+    comp_table['edgeFract'], comp_table['csfFract'] = _aroma_feature_spatial(
         betas, edge_mask, nonbrain_mask, csf_mask)
-    comp_table['maxRPcorr'] = aroma.feature_time_series(mmix, motpars)
-    comp_table['HFC'] = aroma.feature_frequency(ft_mmix, t_r)
+    comp_table['HFC'] = _aroma_feature_frequency(ft_mmix.T, freqs, t_r)
     return comp_table
+
+
+def get_spectrum(data: np.array, tr: float):
+    """
+    Returns the power spectrum and corresponding frequencies when provided
+    with a component time course and repitition time.
+
+    Parameters
+    ----------
+    data : (T,) array_like
+        A timeseries T, on which you would like to perform an fft.
+    tr : :obj:`float`
+        Repetition time (TR) of the data
+
+    Returns
+    -------
+    spectra
+    """
+    # adapted from @dangom
+    power_spectrum = np.abs(np.fft.rfft(data)) ** 2
+    freqs = np.fft.rfftfreq(power_spectrum.shape[-1] * 2 - 1, tr)
+    idx = np.argsort(freqs)
+    return power_spectrum[..., idx], freqs[idx]
 
 
 def fitmodels_direct(catd, mmix, mask, t2s, t2s_full, tes, combmode, ref_img,

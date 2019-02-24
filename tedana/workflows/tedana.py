@@ -17,6 +17,7 @@ from datetime import datetime
 import argparse
 import numpy as np
 import pandas as pd
+import nibabel as nib
 from scipy import stats
 
 from tedana.workflows.parser_utils import is_valid_file
@@ -162,7 +163,7 @@ def _get_parser():
 
 def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
                     tedort=False, gscontrol=None, tedpca='mle', tedica='kundu',
-                    motpars=None, ste=-1, combmode='t2s', verbose=False,
+                    ste=-1, combmode='t2s', verbose=False,
                     wvpca=False, out_dir='.', fixed_seed=42, debug=False,
                     quiet=False):
     """
@@ -197,8 +198,6 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
         Method with which to select components in TEDPCA. Default is 'mle'.
     tedica : {'kundu', 'kundu+aroma', 'manual'}, optional
         Method with which to select components in TEDPCA. Default is 'kundu'.
-    motpars : :obj:`str`, optional
-        Path to motion parameters file. Only used if AROMA ICA is employed.
     ste : :obj:`int`, optional
         Source TEs for models. 0 for all, -1 for optimal combination.
         Default is -1.
@@ -289,6 +288,7 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
 
     mask, masksum = utils.make_adaptive_mask(catd, mask=mask,
                                              minimum=False, getsum=True)
+
     LGR.debug('Retaining {}/{} samples'.format(mask.sum(), n_samp))
     if verbose:
         io.filewrite(masksum, op.join(out_dir, 'adaptive_mask.nii'), ref_img)
@@ -347,8 +347,11 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
         np.savetxt(op.join(out_dir, 'meica_mix.1D'), mmix)
 
         if 'aroma' in tedica:
-            comptable = model.fit_aroma(comptable, t2s, mask, mmix, betas,
-                                        motpars, t_r, ref_img)
+            tsoc_betas = model.computefeats2(data_oc, mmix, mask, normalize=True)
+            tsoc_betas[tsoc_betas < 0] = 0
+            tsoc_betas = utils.unmask(tsoc_betas, mask)
+            comptable = model.fit_aroma(comptable, t2s, mask, mmix, tsoc_betas,
+                                        t_r, ref_img)
 
         comptable = selection.selcomps(seldict, comptable, mmix, manacc,
                                        n_echos, method=tedica)
