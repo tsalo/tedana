@@ -5,12 +5,15 @@
 Base module variables
 """
 
-__version__ = '0.0.3'
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions
+
 __author__ = 'tedana developers'
-__copyright__ = 'Copyright 2017, tedana developers'
+__copyright__ = 'Copyright 2018, tedana developers'
 __credits__ = ['Elizabeth DuPre', 'Prantik Kundu', 'Ross Markello',
-               'Taylor Salo', 'Kirstie Whitaker']
-__license__ = 'LGPL 2.0'
+               'Taylor Salo', 'Kirstie Whitaker', 'Dan Handwerker']
+__license__ = 'LGPL 2.1'
 __maintainer__ = 'Elizabeth DuPre'
 __email__ = 'emd222@cornell.edu'
 __status__ = 'Prototype'
@@ -27,11 +30,12 @@ DOWNLOAD_URL = (
 REQUIRES = [
     'numpy',
     'scikit-learn',
-    'mdp',
     'pywavelets',
     'nilearn',
     'nibabel>=2.1.0',
-    'scipy'
+    'scipy',
+    'versioneer',
+    'pandas'
 ]
 
 TESTS_REQUIRES = [
@@ -52,11 +56,8 @@ EXTRA_REQUIRES = {
 }
 
 # Enable a handle to install all extra dependencies at once
-EXTRA_REQUIRES['all'] = [val for _, val in list(EXTRA_REQUIRES.items())]
-
-PACKAGE_DATA = {
-    'tedana': ['tests/data']
-}
+EXTRA_REQUIRES['all'] = list(set([
+    v for deps in EXTRA_REQUIRES.values() for v in deps]))
 
 # Package classifiers
 CLASSIFIERS = [
@@ -64,5 +65,7 @@ CLASSIFIERS = [
     'Intended Audience :: Science/Research',
     'Topic :: Scientific/Engineering :: Information Analysis',
     'License :: OSI Approved :: GNU Library or Lesser General Public License (LGPL)',
+    'Programming Language :: Python :: 3.5',
     'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7'
 ]

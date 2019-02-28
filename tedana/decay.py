@@ -82,9 +82,9 @@ def fit_decay(data, tes, mask, masksum):
     for echo in range(1, n_echos):
         # perform log linear fit of echo times against MR signal
         # make DV matrix: samples x (time series * echos)
-        log_data = np.log((np.abs(data[:, :echo+1, :]) + 1).reshape(len(data), -1).T)
+        log_data = np.log((np.abs(data[:, :echo + 1, :]) + 1).reshape(len(data), -1).T)
         # make IV matrix: intercept/TEs x (time series * echos)
-        x = np.column_stack([np.ones(echo+1), [-te for te in tes[:echo+1]]])
+        x = np.column_stack([np.ones(echo + 1), [-te for te in tes[:echo + 1]]])
         X = np.repeat(x, n_vols, axis=0)
 
         betas = np.linalg.lstsq(X, log_data, rcond=None)[0]
@@ -158,9 +158,8 @@ def fit_decay_ts(data, tes, mask, masksum):
     s0_full_ts = np.copy(t2s_limited_ts)
 
     for vol in range(n_vols):
-        (t2s_limited, s0_limited,
-         _, _,
-         t2s_full, s0_full) = fit_decay(data, tes, mask, masksum)
+        t2s_limited, s0_limited, _, _, t2s_full, s0_full = fit_decay(
+            data[:, :, vol][:, :, None], tes, mask, masksum)
         t2s_limited_ts[:, vol] = t2s_limited
         s0_limited_ts[:, vol] = s0_limited
         t2s_full_ts[:, vol] = t2s_full
