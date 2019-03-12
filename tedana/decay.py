@@ -78,6 +78,7 @@ def fit_decay(data, tes, mask, masksum):
     data = data[mask]
     t2ss = np.zeros([n_samp, n_echos - 1])
     s0vs = np.zeros([n_samp, n_echos - 1])
+    res = np.zeros([n_samp, n_echos - 1])
 
     for echo in range(1, n_echos):
         # perform log linear fit of echo times against MR signal
@@ -87,7 +88,9 @@ def fit_decay(data, tes, mask, masksum):
         x = np.column_stack([np.ones(echo + 1), [-te for te in tes[:echo + 1]]])
         X = np.repeat(x, n_vols, axis=0)
 
-        betas = np.linalg.lstsq(X, log_data, rcond=None)[0]
+        betas, residuals = np.linalg.lstsq(X, log_data, rcond=None)[:2]
+        pred_y = np.squeeze(np.dot(X, betas))
+        rmse = np.sqrt(np.mean((pred_y - log_data) ** 2, axis=0))
         t2s = 1. / betas[1, :].T
         s0 = np.exp(betas[0, :]).T
 
@@ -96,6 +99,7 @@ def fit_decay(data, tes, mask, masksum):
 
         t2ss[..., echo - 1] = np.squeeze(utils.unmask(t2s, mask))
         s0vs[..., echo - 1] = np.squeeze(utils.unmask(s0, mask))
+        res[..., echo - 1] = np.squeeze(utils.unmask(rmse, mask))
 
     # create limited T2* and S0 maps
     echo_masks = np.zeros([n_samp, n_echos - 1], dtype=bool)
@@ -105,13 +109,15 @@ def fit_decay(data, tes, mask, masksum):
         echo_masks[..., echo - 2] = echo_mask
     t2s_limited = utils.unmask(t2ss[echo_masks], masksum > 1)
     s0_limited = utils.unmask(s0vs[echo_masks], masksum > 1)
+    res_limited = utils.unmask(res[echo_masks], masksum > 1)
+    res_full = res[..., -1]
 
     # create full T2* maps with S0 estimation errors
     t2s_full, s0_full = t2s_limited.copy(), s0_limited.copy()
     t2s_full[masksum == 1] = t2ss[masksum == 1, 0]
     s0_full[masksum == 1] = s0vs[masksum == 1, 0]
 
-    return t2s_limited, s0_limited, t2ss, s0vs, t2s_full, s0_full
+    return t2s_limited, s0_limited, t2ss, s0vs, t2s_full, s0_full, res_limited, res_full
 
 
 def fit_decay_ts(data, tes, mask, masksum):
