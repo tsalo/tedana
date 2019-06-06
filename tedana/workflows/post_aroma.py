@@ -1,6 +1,11 @@
 """
 Apply AROMA to tedana output folder.
 """
+import os.path as op
+import aroma
+import numpy as np
+import nibabel as nib
+from tedana.utils import apply_xforms
 
 
 def aroma_workflow(tedana_dir, motpars_file, t_r, xforms=None):
