@@ -44,8 +44,9 @@ def aroma_workflow(tedana_dir, motpars_file, t_r, xforms=None):
     clf_df.loc[clf_df['classification'] == 'rejected']
     comptable = pd.read_csv(op.join(tedana_dir, 'comp_table_ica.txt'),
                             sep='\t', index_col='component')
-    comptable['original_classification'] = comptable['classification']
-    comptable['original_rationale'] = comptable['rationale']
+    comptable.rename(columns={'classification': 'original_classification',
+                              'rationale': 'original_rationale'},
+                     inplace=True)
     comptable = pd.merge(comptable, clf_df, on='component', how='outer')
     # AROMA is only used for rejection, so retain any other classifications
     # from the original decision tree
