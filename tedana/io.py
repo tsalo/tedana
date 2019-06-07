@@ -221,7 +221,7 @@ def writeresults(ts, mask, comptable, mmix, n_vols, ref_img):
 
     write_split_ts(ts, mmix, mask, comptable, ref_img, suffix='OC')
 
-    ts_B = get_coeffs(ts, mmix, mask)
+    ts_B = get_coeffs(ts, mmix, mask=None)
     fout = filewrite(ts_B, 'betas_OC', ref_img)
     LGR.info('Writing full ICA coefficient feature set: {}'.format(op.abspath(fout)))
 

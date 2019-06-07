@@ -138,13 +138,13 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
         LGR.warning("Argument 't2s' is not required if 'combmode' is 'paid'. "
                     "'t2s' array will not be used.")
 
-    data = data[mask, :, :]  # mask out empty voxels/samples
+    masked_data = data[mask, :, :]  # mask out empty voxels/samples
     tes = np.array(tes)[np.newaxis, ...]  # (1 x E) array_like
 
     if combmode == 'paid':
         LGR.info('Optimally combining data with parallel-acquired inhomogeneity '
                  'desensitized (PAID) method')
-        combined = _combine_paid(data, tes)
+        combined = _combine_paid(masked_data, tes)
     else:
         if t2s.ndim == 1:
             msg = 'Optimally combining data with voxel-wise T2 estimates'
@@ -152,9 +152,10 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
             msg = ('Optimally combining data with voxel- and volume-wise T2 '
                    'estimates')
         t2s = t2s[mask, ..., np.newaxis]  # mask out empty voxels/samples
-
         LGR.info(msg)
-        combined = _combine_t2s(data, tes, t2s)
+        combined = _combine_t2s(masked_data, tes, t2s)
 
     combined = unmask(combined, mask)
+    LGR.info('Using average signal across echoes for voxels outside mask')
+    combined[~mask, :] = np.mean(data[~mask, ...], axis=1)
     return combined

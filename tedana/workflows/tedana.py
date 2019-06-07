@@ -368,7 +368,6 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
     t2s[t2s > cap_t2s * 10] = cap_t2s
     io.filewrite(t2s, op.join(out_dir, 't2sv.nii'), ref_img)
     io.filewrite(s0, op.join(out_dir, 's0v.nii'), ref_img)
-
     if verbose:
         io.filewrite(t2ss, op.join(out_dir, 't2ss.nii'), ref_img)
         io.filewrite(s0s, op.join(out_dir, 's0vs.nii'), ref_img)
