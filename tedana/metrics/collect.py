@@ -31,8 +31,8 @@ def generate_metrics(data_cat, data_optcom, mixing, mask, tes, ref_img,
     mixing : (T x C) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data_cat`
-    mask : img_like
-        Mask
+    mask : (S,) array_like or None, optional
+        Boolean mask array. Default: None
     tes : list
         List of echo times associated with `data_cat`, in milliseconds
     ref_img : str or img_like
@@ -102,6 +102,23 @@ def generate_metrics(data_cat, data_optcom, mixing, mask, tes, ref_img,
     # Apply masks before anything else
     data_cat = data_cat[mask, ...]
     data_optcom = data_optcom[mask, :]
+
+    larger_mask_mepi = np.abs(data_cat[:, 0, :]).sum(axis=-1) == 0
+    larger_mask_optcom = np.abs(data_optcom).sum(axis=-1) == 0
+    larger_mask = larger_mask_mepi & larger_mask_optcom
+    if np.any(larger_mask):
+        warn_str = ''
+        if np.any(larger_mask_mepi):
+            warn_str.append('first echo EPI data ')
+        if np.any(larger_mask_optcom):
+            warn_str.append('optimally combined data ')
+        LGR.warning(('Voxels in {}with all zero values are outside the mask.'
+                     'Mask growing to exclude these voxels without data').format(warn_str))
+        # This is wrong. If I want to save the expanded mask I'll need to re-index larger_mask
+        #  to the original dimension
+        # mask = mask + (not larger_mask)
+        data_cat = data_cat[not mask, ...]
+        data_optcom = data_optcom[not mask, :]
 
     required_metrics = dependency_resolver(METRIC_DEPENDENCIES, metrics, INPUTS)
     mixing = mixing.copy()

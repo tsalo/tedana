@@ -15,7 +15,7 @@ RepLGR = logging.getLogger('REPORT')
 RefLGR = logging.getLogger('REFERENCES')
 
 
-def calculate_weights(data_optcom, mixing):
+def calculate_weights(data_optcom, mixing, mask=None):
     """
     Calculate standardized parameter estimates between data and mixing matrix.
 
@@ -25,6 +25,8 @@ def calculate_weights(data_optcom, mixing):
         Optimally combined data
     mixing : (T x C) array_like
         Mixing matrix
+    mask : (S,) array_like or None, optional
+        Boolean mask array. Default: None
 
     Returns
     -------
@@ -35,7 +37,7 @@ def calculate_weights(data_optcom, mixing):
     assert data_optcom.shape[1] == mixing.shape[0]
     mixing_z = stats.zscore(mixing, axis=0)
     # compute un-normalized weight dataset (features)
-    weights = computefeats2(data_optcom, mixing_z, normalize=False)
+    weights = computefeats2(data_optcom, mixing_z, normalize=False, mask=mask)
     return weights
 
 
