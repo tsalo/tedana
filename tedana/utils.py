@@ -81,6 +81,16 @@ def make_outlier_mask(data, mask):
     return out_mask
 
 
+def apply_adaptive_mask(data, adaptive_mask):
+    expanded_mask = np.zeros((data.shape[0], data.shape[1]), dtype=bool)
+    for i_voxel in range(adaptive_mask.shape[0]):
+        mask_val = adaptive_mask[i_voxel]
+        expanded_mask[i_voxel, :mask_val] = True
+
+    masked_data = np.squeeze(data[expanded_mask])
+    return masked_data
+
+
 def make_adaptive_mask(data, mask=None):
     """
     Makes map of `data` specifying longest echo a voxel can be sampled with

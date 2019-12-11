@@ -10,7 +10,7 @@ from scipy import stats
 from sklearn.decomposition import PCA
 
 from tedana import metrics, utils, io
-from tedana.decomposition import (ma_pca, _utils)
+from tedana.decomposition import ma_pca
 from tedana.stats import computefeats2
 from tedana.selection import kundu_tedpca
 from tedana.due import due, BibTeX
@@ -250,7 +250,7 @@ def tedpca(data_cat, data_oc, combmode, mask, t2s, t2sG,
         data = data_oc[mask, :][:, np.newaxis, :]
     elif len(source_tes) == 1 and source_tes[0] == 0:
         LGR.info('Computing PCA of spatially concatenated multi-echo data')
-        data = data_cat[mask, ...]
+        data = utils.apply_adaptive_mask(data, adaptive_mask)
     else:
         LGR.info('Computing PCA of echo #{0}'.format(','.join([str(ee) for ee in source_tes])))
         data = np.stack([data_cat[mask, ee, :] for ee in source_tes - 1], axis=1)
