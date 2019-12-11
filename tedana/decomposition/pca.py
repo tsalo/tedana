@@ -255,9 +255,6 @@ def tedpca(data_cat, data_oc, combmode, mask, t2s, t2sG,
         LGR.info('Computing PCA of echo #{0}'.format(','.join([str(ee) for ee in source_tes])))
         data = np.stack([data_cat[mask, ee, :] for ee in source_tes - 1], axis=1)
 
-    eim = np.squeeze(_utils.eimask(data))
-    data = np.squeeze(data[eim])
-
     data_z = ((data.T - data.T.mean(axis=0)) / data.T.std(axis=0)).T  # var normalize ts
     data_z = (data_z - data_z.mean()) / data_z.std()  # var normalize everything
 

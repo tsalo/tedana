@@ -439,15 +439,15 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
         LGR.info('Using user-defined mask')
         RepLGR.info("A user-defined mask was applied to the data.")
 
-    mask, masksum = utils.make_adaptive_mask(catd, mask=mask, getsum=True)
+    mask, adaptive_mask = utils.make_adaptive_mask(catd, mask=mask)
     LGR.debug('Retaining {}/{} samples'.format(mask.sum(), n_samp))
-    io.filewrite(masksum, op.join(out_dir, 'adaptive_mask.nii'), ref_img)
+    io.filewrite(adaptive_mask, op.join(out_dir, 'adaptive_mask.nii'), ref_img)
 
     os.chdir(out_dir)
 
     LGR.info('Computing T2* map')
     t2s_limited, s0_limited, t2s_full, s0_full = decay.fit_decay(
-        catd, tes, mask, masksum, fittype)
+        catd, tes, mask, adaptive_mask, fittype)
 
     # set a hard cap for the T2* map
     # anything that is 10x higher than the 99.5 %ile will be reset to 99.5 %ile

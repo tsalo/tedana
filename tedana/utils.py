@@ -5,6 +5,7 @@ import logging
 
 import numpy as np
 import nibabel as nib
+from scipy import stats
 from scipy import ndimage
 from nilearn._utils import check_niimg
 from sklearn.utils import check_array
@@ -41,7 +42,46 @@ def load_image(data):
     return fdata
 
 
-def make_adaptive_mask(data, mask=None, getsum=False):
+def make_outlier_mask(data, mask):
+    """
+    Returns mask for data between [0.001, 5] * 98th percentile of data
+    (computed separately at each echo and then merged).
+
+    Parameters
+    ----------
+    data : (M x E x T) array_like
+        Input data, where `S` is samples, `E` is echos, and `T` is time
+
+    Returns
+    -------
+    outlier_mask : (S,) :obj:`numpy.ndarray`
+        Valued array indicating the number of echos before there's an echo
+        with an outlier value at that voxel.
+    """
+    data = data[mask, ...]
+    outlier_mask = np.zeros(data.shape[:2], dtype=bool)
+    for i_echo in range(data.shape[1]):
+        perc98 = stats.scoreatpercentile(data[:, i_echo, :].flatten(), 98,
+                                         interpolation_method='lower')
+        lthr, hthr = 0.001 * perc98, 5 * perc98
+        LGR.debug('Eimask threshold boundaries: {:.03f} {:.03f}'.format(lthr, hthr))
+        echo_mean = data[:, i_echo, :].mean(axis=1)
+        outlier_mask[np.logical_and(echo_mean > lthr, echo_mean < hthr), i_echo] = True
+
+    out_mask = np.zeros(data.shape[0], dtype=int)
+    for i_voxel in range(data.shape[0]):
+        for j_echo in range(data.shape[1]):
+            # Fill Falses forward, so if an echo is found for that voxel that
+            # has an outlier, all subsequent echoes are masked out.
+            if outlier_mask[i_voxel, j_echo] is False:
+                i_mask[i_voxel, j_echo:] = False
+            else:
+                out_mask[i_voxel] = j_echo + 1
+    out_mask = unmask(out_mask, mask)
+    return out_mask
+
+
+def make_adaptive_mask(data, mask=None):
     """
     Makes map of `data` specifying longest echo a voxel can be sampled with
 
@@ -53,17 +93,15 @@ def make_adaptive_mask(data, mask=None, getsum=False):
     mask : :obj:`str` or img_like, optional
         Binary mask for voxels to consider in TE Dependent ANAlysis. Default is
         to generate mask from data with good signal across echoes
-    getsum : :obj:`bool`, optional
-        Return `masksum` in addition to `mask`. Default: False
 
     Returns
     -------
     mask : (S,) :obj:`numpy.ndarray`
         Boolean array of voxels that have sufficient signal in at least one
-        echo
-    masksum : (S,) :obj:`numpy.ndarray`
+        echo.
+    adaptive_mask : (S,) :obj:`numpy.ndarray`
         Valued array indicating the number of echos with sufficient signal in a
-        given voxel. Only returned if `getsum = True`
+        given voxel.
     """
     RepLGR.info("An adaptive mask was then generated, in which each voxel's "
                 "value reflects the number of echoes with 'good' data.")
@@ -87,27 +125,29 @@ def make_adaptive_mask(data, mask=None, getsum=False):
 
     # determine samples where absolute value is greater than echo-specific thresholds
     # and count # of echos that pass criterion
-    masksum = (np.abs(echo_means) > lthrs).sum(axis=-1)
+    adaptive_mask = (np.abs(echo_means) > lthrs).sum(axis=-1)
 
     if mask is None:
         # make it a boolean mask to (where we have at least 1 echo with good signal)
-        mask = masksum.astype(bool)
+        mask = adaptive_mask.astype(bool)
+        outlier_mask = make_outlier_mask(data, mask)
+        adaptive_mask = np.minimum(adaptive_mask, outlier_mask)
     else:
         # if the user has supplied a binary mask
         mask = load_image(mask).astype(bool)
-        masksum = masksum * mask
-        # reduce mask based on masksum
+        outlier_mask = make_outlier_mask(data, mask)
+        adaptive_mask = np.minimum(adaptive_mask, outlier_mask)
+        adaptive_mask = adaptive_mask * mask
+
+        # reduce mask based on adaptive_mask
         # TODO: Use visual report to make checking the reduced mask easier
-        if np.any(masksum[mask] == 0):
-            n_bad_voxels = np.sum(masksum[mask] == 0)
+        if np.any(adaptive_mask[mask] == 0):
+            n_bad_voxels = np.sum(adaptive_mask[mask] == 0)
             LGR.warning('{0} voxels in user-defined mask do not have good '
                         'signal. Removing voxels from mask.'.format(n_bad_voxels))
-            mask = masksum.astype(bool)
+            mask = adaptive_mask.astype(bool)
 
-    if getsum:
-        return mask, masksum
-
-    return mask
+    return mask, adaptive_mask
 
 
 def unmask(data, mask):

@@ -80,10 +80,8 @@ def test_load_image():
 def test_make_adaptive_mask():
     # load data make masks
     data = io.load_data(fnames, n_echos=len(tes))[0]
-    mask, masksum = utils.make_adaptive_mask(data, getsum=True)
+    mask, masksum = utils.make_adaptive_mask(data)
 
-    # getsum doesn't change mask values
-    assert np.allclose(mask, utils.make_adaptive_mask(data))
     # shapes are all the same
     assert mask.shape == masksum.shape == (64350,)
     assert np.allclose(mask, masksum.astype(bool))
@@ -96,9 +94,7 @@ def test_make_adaptive_mask():
 
     # test user-defined mask
     # TODO: Add mask file with no bad voxels to test against
-    mask, masksum = utils.make_adaptive_mask(data, mask=pjoin(datadir,
-                                                              'mask.nii.gz'),
-                                             getsum=True)
+    mask, masksum = utils.make_adaptive_mask(data, mask=pjoin(datadir, 'mask.nii.gz'))
     assert np.allclose(mask, masksum.astype(bool))
 
 
@@ -121,7 +117,7 @@ def test_smoke_make_adaptive_mask():
     """
     ensure that make_adaptive_mask returns reasonable objects with random inputs
     in the correct format
-    Note: make_adaptive_mask has optional paramters - mask and getsum
+    Note: make_adaptive_mask has optional parameter (mask)
     """
     n_samples = 100
     n_echos = 5
@@ -131,7 +127,6 @@ def test_smoke_make_adaptive_mask():
 
     assert utils.make_adaptive_mask(data) is not None
     assert utils.make_adaptive_mask(data, mask=mask) is not None  # functions with mask
-    assert utils.make_adaptive_mask(data, getsum=True) is not None  # functions when getsumis true
 
 
 def test_smoke_unmask():
