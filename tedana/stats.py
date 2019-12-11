@@ -93,7 +93,7 @@ def getfbounds(n_echos):
     return f05, f025, f01
 
 
-def computefeats2(data, mmix, mask=None, normalize=True):
+def computefeats2(data, mmix, mask=None):
     """
     Converts `data` to component space using `mmix`
 
@@ -232,6 +232,7 @@ def get_ls_coeffs(data, X, mask=None, add_const=False, compute_zvalues=False, mi
         C = C[:, np.newaxis]
         std_betas = np.sqrt(np.dot(sigma, C.T))
         z_values = t_to_z(betas / std_betas, df)
+        z_values = np.clip(z_values, -40, 40)
 
     if add_const:  # drop beta for intercept, if specified
         betas = betas[:, :-1]
