@@ -110,10 +110,11 @@ def generate_metrics(data_cat, data_optcom, mixing, mask, tes, ref_img,
         warn_str = ''
         if np.any(larger_mask_mepi):
             warn_str.append('first echo EPI data ')
-        if np.any(larger_mask_optcom):
+        if np.any(larger_mask_optcom):  # potentially need an 'and' as well
             warn_str.append('optimally combined data ')
-        LGR.warning(('Voxels in {}with all zero values are outside the mask.'
-                     'Mask growing to exclude these voxels without data').format(warn_str))
+        LGR.warning(('{} voxels in {}with all zero values are outside the mask.'
+                     'Mask growing to exclude these voxels without data').format(
+                         np.sum(larger_mask), warn_str))
         # This is wrong. If I want to save the expanded mask I'll need to re-index larger_mask
         #  to the original dimension
         # mask = mask + (not larger_mask)
