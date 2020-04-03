@@ -374,7 +374,7 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
 
     LGR.info('Loading input data: {}'.format([f for f in data]))
     catd, ref_img = io.load_data(data, n_echos=n_echos)
-    n_samp, n_echos, n_vols = catd.shape
+    n_vols, n_samp, n_echos = catd.shape
     LGR.debug('Resulting data shape: {}'.format(catd.shape))
 
     if no_png and (png_cmap != 'coolwarm'):
@@ -426,7 +426,7 @@ def tedana_workflow(data, tes, mask=None, mixm=None, ctab=None, manacc=None,
     RepLGR.info("TE-dependence analysis was performed on input data.")
     if mask is None:
         LGR.info('Computing EPI mask from first echo')
-        first_echo_img = io.new_nii_like(ref_img, catd[:, 0, :])
+        first_echo_img = io.new_nii_like(ref_img, catd[:, :, 0])
         mask = compute_epi_mask(first_echo_img)
         RepLGR.info("An initial mask was generated from the first echo using "
                     "nilearn's compute_epi_mask function.")

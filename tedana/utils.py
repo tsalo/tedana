@@ -27,7 +27,7 @@ def load_image(data):
 
     Returns
     -------
-    fdata : (S [x T]) :obj:`numpy.ndarray`
+    fdata : ([T x] S) :obj:`numpy.ndarray`
         Reshaped `data`, where `S` is samples and `T` is time
     """
 
@@ -36,7 +36,7 @@ def load_image(data):
     elif isinstance(data, nib.spatialimages.SpatialImage):
         data = check_niimg(data).get_data()
 
-    fdata = data.reshape((-1,) + data.shape[3:]).squeeze()
+    fdata = data.reshape((-1,) + data.shape[3:]).T.squeeze()
 
     return fdata
 
@@ -47,7 +47,7 @@ def make_adaptive_mask(data, mask=None, getsum=False):
 
     Parameters
     ----------
-    data : (S x E x T) array_like
+    data : (T x S x E) array_like
         Multi-echo data array, where `S` is samples, `E` is echos, and `T` is
         time
     mask : :obj:`str` or img_like, optional
@@ -69,7 +69,7 @@ def make_adaptive_mask(data, mask=None, getsum=False):
                 "value reflects the number of echoes with 'good' data.")
 
     # take temporal mean of echos and extract non-zero values in first echo
-    echo_means = data.mean(axis=-1)  # temporal mean of echos
+    echo_means = data.mean(axis=0)  # temporal mean of echos
     first_echo = echo_means[echo_means[:, 0] != 0, 0]
 
     # get 33rd %ile of `first_echo` and find corresponding index
@@ -116,7 +116,7 @@ def unmask(data, mask):
 
     Parameters
     ----------
-    data : (M [x E [x T]]) array_like
+    data : ([T x] M [x E]) array_like
         Masked array, where `M` is the number of `True` values in `mask`
     mask : (S,) array_like
         Boolean array of `S` samples that was used to mask `data`. It should
@@ -124,12 +124,19 @@ def unmask(data, mask):
 
     Returns
     -------
-    out : (S [x E [x T]]) :obj:`numpy.ndarray`
+    out : ([T x] S [x E]) :obj:`numpy.ndarray`
         Unmasked `data` array
     """
-
-    out = np.zeros(mask.shape + data.shape[1:], dtype=data.dtype)
-    out[mask] = data
+    if data.ndim == 3:
+        new_shape = mask.shape + data.shape[:1] + data.shape[2:]
+        out = np.zeros(new_shape, dtype=data.dtype)
+        out[:, mask, :] = data
+    elif data.ndim == 2:
+        new_shape = 5
+    elif data.ndim == 1:
+        new_shape = mask.shape
+        out = np.zeros(new_shape, dtype=data.dtype)
+        out[mask] = data
     return out
 
 

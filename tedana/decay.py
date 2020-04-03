@@ -49,7 +49,8 @@ def fit_monoexponential(data_cat, echo_times, adaptive_mask):
                 "mask was used to determine which echoes would be used to "
                 "estimate T2* and S0. In cases of model fit failure, T2*/S0 "
                 "estimates from the log-linear fit were retained instead.")
-    n_samp, n_echos, n_vols = data_cat.shape
+
+    n_vols, n_samp, n_echos = data_cat.shape
     t2s_asc_maps = np.zeros([n_samp, n_echos - 1])
     s0_asc_maps = np.zeros([n_samp, n_echos - 1])
 
@@ -78,7 +79,9 @@ def fit_monoexponential(data_cat, echo_times, adaptive_mask):
         echo_mask[adaptive_mask == echo_num] = True
         echo_masks[..., i_echo] = echo_mask
 
-        data_2d = data_cat[:, :echo_num, :].reshape(len(data_cat), -1).T
+        # Reshape to SxExT
+        temp_data_cat = np.swapaxes(np.swapaxes(data_cat, 0, 1), 1, 2)
+        data_2d = temp_data_cat[:, :echo_num, :].reshape(n_samp, -1).T
         echo_times_1d = np.repeat(echo_times[:echo_num], n_vols)
 
         # perform a monoexponential fit of echo times against MR signal
@@ -127,7 +130,7 @@ def fit_loglinear(data_cat, echo_times, adaptive_mask, report=True):
                     "maps. For each voxel, the value from the adaptive mask was "
                     "used to determine which echoes would be used to estimate T2* "
                     "and S0.")
-    n_samp, n_echos, n_vols = data_cat.shape
+    n_vols, n_samp, n_echos = data_cat.shape
     t2s_asc_maps = np.zeros([n_samp, n_echos - 1])
     s0_asc_maps = np.zeros([n_samp, n_echos - 1])
 
@@ -144,13 +147,15 @@ def fit_loglinear(data_cat, echo_times, adaptive_mask, report=True):
             voxel_idx = np.where(adaptive_mask == echo_num)[0]
 
         # Create echo masks to assign values to limited vs full maps later
-        echo_mask = np.squeeze(echo_masks[..., i_echo])
+        echo_mask = np.squeeze(echo_masks[:, i_echo])
         echo_mask[adaptive_mask == echo_num] = True
-        echo_masks[..., i_echo] = echo_mask
+        echo_masks[:, i_echo] = echo_mask
 
         # perform log linear fit of echo times against MR signal
         # make DV matrix: samples x (time series * echos)
-        data_2d = data_cat[voxel_idx, :echo_num, :].reshape(len(voxel_idx), -1).T
+        # reshape to SxExT
+        temp_data_cat = np.swapaxes(np.swapaxes(data_cat, 0, 1), 1, 2)
+        data_2d = temp_data_cat[voxel_idx, :echo_num, :].reshape(len(voxel_idx), -1).T
         log_data = np.log(np.abs(data_2d) + 1)
 
         # make IV matrix: intercept/TEs x (time series * echos)
@@ -229,20 +234,20 @@ def fit_decay(data, tes, mask, adaptive_mask, fittype):
         in :math:`S_0` map with 0.
     3.  Generate limited :math:`T_2^*` and :math:`S_0` maps by doing something.
     """
-    if data.shape[1] != len(tes):
+    if data.shape[2] != len(tes):
         raise ValueError('Second dimension of data ({0}) does not match number '
-                         'of echoes provided (tes; {1})'.format(data.shape[1], len(tes)))
-    elif not (data.shape[0] == mask.shape[0] == adaptive_mask.shape[0]):
+                         'of echoes provided (tes; {1})'.format(data.shape[2], len(tes)))
+    elif not (data.shape[1] == mask.shape[0] == adaptive_mask.shape[0]):
         raise ValueError('First dimensions (number of samples) of data ({0}), '
                          'mask ({1}), and adaptive_mask ({2}) do not '
-                         'match'.format(data.shape[0], mask.shape[0], adaptive_mask.shape[0]))
+                         'match'.format(data.shape[1], mask.shape[0], adaptive_mask.shape[0]))
 
     data = data.copy()
     if data.ndim == 2:
-        data = data[:, :, None]
+        data = data[None, :, :]
 
     # Mask the inputs
-    data_masked = data[mask, :, :]
+    data_masked = data[:, mask, :]
     adaptive_mask_masked = adaptive_mask[mask]
 
     if fittype == 'loglin':

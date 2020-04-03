@@ -11,6 +11,7 @@ import nibabel as nib
 from nibabel.filename_parser import splitext_addext
 from nilearn._utils import check_niimg
 from nilearn.image import new_img_like
+from nilearn import masking
 
 from tedana import utils
 from tedana.stats import computefeats2, get_coeffs
@@ -290,7 +291,7 @@ def new_nii_like(ref_img, data, affine=None, copy_header=True):
     ----------
     ref_img : :obj:`str` or img_like
         Reference image
-    data : (S [x T]) array_like
+    data : ([T x] S) array_like
         Data to be saved
     affine : (4 x 4) array_like, optional
         Transformation matrix to be used. Default: `ref_img.affine`
@@ -302,19 +303,13 @@ def new_nii_like(ref_img, data, affine=None, copy_header=True):
     nii : :obj:`nibabel.nifti1.Nifti1Image`
         NiftiImage
     """
-
     ref_img = check_niimg(ref_img)
-    newdata = data.reshape(ref_img.shape[:3] + data.shape[1:])
-    if '.nii' not in ref_img.valid_exts:
-        # this is rather ugly and may lose some information...
-        nii = nib.Nifti1Image(newdata, affine=ref_img.affine,
-                              header=ref_img.header)
+    if data.ndim == 2:
+        new_shape = ref_img.shape[:3] + data.shape[:1]
     else:
-        # nilearn's `new_img_like` is a very nice function
-        nii = new_img_like(ref_img, newdata, affine=affine,
-                           copy_header=copy_header)
+        new_shape = ref_img.shape[:3]
+    nii = masking.unmask(data, ref_img)
     nii.set_data_dtype(data.dtype)
-
     return nii
 
 
@@ -391,16 +386,18 @@ def load_data(data, n_echos=None):
             raise ValueError('Cannot run `tedana` with only two echos: '
                              '{}'.format(data))
         else:  # individual echo files were provided (surface or volumetric)
-            fdata = np.stack([utils.load_image(f) for f in data], axis=1)
-            ref_img = check_niimg(data[0])
-            ref_img.header.extensions = []
+            fdata = np.stack([utils.load_image(f) for f in data], axis=2)
+            img = check_niimg(data[0])
+            img.header.extensions = []
+            ref_img = img.__class__(np.ones(img.shape[:3]), affine=img.affine,
+                                    header=img.header, extra=img.extra)
             return np.atleast_3d(fdata), ref_img
 
     img = check_niimg(data)
     (nx, ny), nz = img.shape[:2], img.shape[2] // n_echos
     fdata = utils.load_image(img.get_data().reshape(nx, ny, nz, n_echos, -1, order='F'))
     # create reference image
-    ref_img = img.__class__(np.zeros((nx, ny, nz, 1)), affine=img.affine,
+    ref_img = img.__class__(np.ones((nx, ny, nz)), affine=img.affine,
                             header=img.header, extra=img.extra)
     ref_img.header.extensions = []
     ref_img.header.set_sform(ref_img.header.get_sform(), code=1)

@@ -21,11 +21,11 @@ def _combine_t2s(data, tes, ft2s):
 
     Parameters
     ----------
-    data : (M x E x T) array_like
+    data : (T x M x E) array_like
         Masked data.
     tes : (1 x E) array_like
         Echo times in milliseconds.
-    ft2s : (M [x T] X 1) array_like
+    ft2s : ([T x] M X 1) array_like
         Either voxel-wise or voxel- and volume-wise estimates of T2*.
 
     Returns
@@ -41,21 +41,21 @@ def _combine_t2s(data, tes, ft2s):
                 "multi‐echo functional MR imaging. Magnetic Resonance in "
                 "Medicine: An Official Journal of the International Society "
                 "for Magnetic Resonance in Medicine, 42(1), 87-97.")
-    n_vols = data.shape[-1]
-    alpha = tes * np.exp(-tes / ft2s)
+    n_vols = data.shape[0]
+    alpha = tes * np.exp(-tes / ft2s.T)
     if alpha.ndim == 2:
         # Voxel-wise T2 estimates
-        alpha = np.tile(alpha[:, :, np.newaxis], (1, 1, n_vols))
+        alpha = np.tile(alpha[np.newaxis, :, :], (n_vols, 1, 1))
     elif alpha.ndim == 3:
         # Voxel- and volume-wise T2 estimates
-        # alpha is currently (S, T, E) but should be (S, E, T) like mdata
-        alpha = np.swapaxes(alpha, 1, 2)
+        # alpha is currently (S, T, E) but should be (T, S, E) like mdata
+        alpha = np.swapaxes(alpha, 0, 1)
 
         # If all values across echos are 0, set to 1 to avoid
         # divide-by-zero errors
-        ax0_idx, ax2_idx = np.where(np.all(alpha == 0, axis=1))
-        alpha[ax0_idx, :, ax2_idx] = 1.
-    combined = np.average(data, axis=1, weights=alpha)
+        ax0_idx, ax1_idx = np.where(np.all(alpha == 0, axis=2))
+        alpha[ax0_idx, ax1_idx, :] = 1.
+    combined = np.average(data, axis=2, weights=alpha)
     return combined
 
 
@@ -70,7 +70,7 @@ def _combine_paid(data, tes):
 
     Parameters
     ----------
-    data : (M x E x T) array_like
+    data : (T x M x E) array_like
         Masked data.
     tes : (1 x E) array_like
         Echo times in milliseconds.
@@ -90,10 +90,10 @@ def _combine_paid(data, tes):
                 "Magnetic Resonance in Medicine: An Official Journal of the "
                 "International Society for Magnetic Resonance in Medicine, "
                 "55(6), 1227-1235.")
-    n_vols = data.shape[-1]
-    alpha = data.mean(axis=-1) * tes
-    alpha = np.tile(alpha[:, :, np.newaxis], (1, 1, n_vols))
-    combined = np.average(data, axis=1, weights=alpha)
+    n_vols = data.shape[0]
+    alpha = data.mean(axis=0) * tes
+    alpha = np.tile(alpha[np.newaxis, :, :], (n_vols, 1, 1))
+    combined = np.average(data, axis=2, weights=alpha)
     return combined
 
 
@@ -103,13 +103,13 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
 
     Parameters
     ----------
-    data : (S x E x T) :obj:`numpy.ndarray`
+    data : (T x S x E) :obj:`numpy.ndarray`
         Concatenated BOLD data.
     tes : (E,) :obj:`numpy.ndarray`
         Array of TEs, in seconds.
     mask : (S,) :obj:`numpy.ndarray`
         Brain mask in 3D array.
-    t2s : (S [x T]) :obj:`numpy.ndarray` or None, optional
+    t2s : ([T x] S) :obj:`numpy.ndarray` or None, optional
         Estimated T2* values. Only required if combmode = 't2s'.
         Default is None.
     combmode : {'t2s', 'paid'}, optional
@@ -120,7 +120,7 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
 
     Returns
     -------
-    combined : (S x T) :obj:`numpy.ndarray`
+    combined : (T x S) :obj:`numpy.ndarray`
         Optimally combined data.
 
     Notes
@@ -135,19 +135,19 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
         estimated in the previous step.
     """
     if data.ndim != 3:
-        raise ValueError('Input data must be 3D (S x E x T)')
+        raise ValueError('Input data must be 3D (T x S x E)')
 
-    if len(tes) != data.shape[1]:
+    if len(tes) != data.shape[2]:
         raise ValueError('Number of echos provided does not match second '
                          'dimension of input data: {0} != '
-                         '{1}'.format(len(tes), data.shape[1]))
+                         '{1}'.format(len(tes), data.shape[2]))
 
     if mask.ndim != 1:
         raise ValueError('Mask is not 1D')
-    elif mask.shape[0] != data.shape[0]:
+    elif mask.shape[0] != data.shape[1]:
         raise ValueError('Mask and data do not have same number of '
                          'voxels/samples: {0} != {1}'.format(mask.shape[0],
-                                                             data.shape[0]))
+                                                             data.shape[1]))
 
     if combmode not in ['t2s', 'paid']:
         raise ValueError("Argument 'combmode' must be either 't2s' or 'paid'")
@@ -158,7 +158,7 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
         LGR.warning("Argument 't2s' is not required if 'combmode' is 'paid'. "
                     "'t2s' array will not be used.")
 
-    data = data[mask, :, :]  # mask out empty voxels/samples
+    data = data[:, mask, :]  # mask out empty voxels/samples
     tes = np.array(tes)[np.newaxis, ...]  # (1 x E) array_like
 
     if combmode == 'paid':
@@ -168,13 +168,15 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
     else:
         if t2s.ndim == 1:
             msg = 'Optimally combining data with voxel-wise T2 estimates'
+            t2s = t2s[np.newaxis, mask]  # mask out empty voxels/samples
         else:
             msg = ('Optimally combining data with voxel- and volume-wise T2 '
                    'estimates')
-        t2s = t2s[mask, ..., np.newaxis]  # mask out empty voxels/samples
+            t2s = t2s[mask, :]
 
         LGR.info(msg)
         combined = _combine_t2s(data, tes, t2s)
-
+    print(combined.shape)
+    print(mask.shape)
     combined = unmask(combined, mask)
     return combined
