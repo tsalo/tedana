@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('AGG')
 import matplotlib.pyplot as plt
 
-from tedana import metrics
+from tedana import stats
 from tedana.utils import get_spectrum
 
 LGR = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def write_comp_figs(ts, mask, comptable, mmix, ref_img, out_dir,
         LGR.warning('Provided colormap is not recognized, proceeding with default')
         png_cmap = 'coolwarm'
     # regenerate the beta images
-    ts_B = metrics.get_coeffs(ts, mmix, mask)
+    ts_B = stats.get_coeffs(ts, mmix, mask)
     ts_B = ts_B.reshape(ref_img.shape[:3] + ts_B.shape[1:])
     # trim edges from ts_B array
     ts_B = trim_edge_zeros(ts_B)
@@ -243,6 +243,41 @@ def write_kappa_scatter(comptable, out_dir):
     plt.savefig(scatter_title)
 
     plt.close()
+
+
+def write_kappa_scree(comptable, out_dir):
+    """
+    Creates a scree plot sorted by kappa, showing the values of the kappa and
+    rho metrics as well as the variance explained.
+
+    Parameters
+    ----------
+    comptable : (C x X) :obj:`pandas.DataFrame`
+        Component metric table. One row for each component, with a column for
+        each metric. Requires at least four columns: "classification",
+        "kappa", "rho", and "variance explained".
+    out_dir : :obj:`str`
+        Figures folder within output directory
+
+    """
+
+    fig, ax1 = plt.subplots(figsize=(10, 9))
+
+    ax1.plot(comptable.index, comptable['variance explained'],
+             'k-', alpha=0.5, linewidth=2, label='Variance')
+    ax1.set_ylabel('Variance Explained', fontsize=15)
+    ax2 = ax1.twinx()
+
+    ax2.plot(comptable.index, comptable.kappa,
+             'b-', linewidth=2, label='Kappa')
+    ax2.plot(comptable.index, comptable.rho,
+             'r-', linewidth=2, label='Rho')
+    ax2.set_title('Kappa/Rho Metrics', fontsize=28)
+    ax1.set_xlabel('Component Number', fontsize=15)
+    ax2.set_ylabel('Metric Value', fontsize=15)
+    fig.legend(loc='upper right', bbox_to_anchor=(0.82, 0.78))
+    screefig_title = os.path.join(out_dir, 'Kappa_Rho_Scree_plot.png')
+    fig.savefig(screefig_title)
 
 
 def write_summary_fig(comptable, out_dir):

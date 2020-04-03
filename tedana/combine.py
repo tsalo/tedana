@@ -170,7 +170,7 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
             msg = 'Optimally combining data with voxel-wise T2 estimates'
             t2s = t2s[np.newaxis, mask]  # mask out empty voxels/samples
         else:
-            msg = ('Optimally combining data with voxel- and volume-wise T2 '
+            msg = ('Optimally combining data with voxel- and volume-wise T2* '
                    'estimates')
             t2s = t2s[mask, :]
 
