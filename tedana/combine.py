@@ -14,6 +14,54 @@ RefLGR = logging.getLogger('REFERENCES')
 @due.dcite(Doi('10.1002/(SICI)1522-2594(199907)42:1<87::AID-MRM13>3.0.CO;2-O'),
            description='T2* method of combining data across echoes using '
                        'monoexponential equation.')
+def _combine_t2s_summation(data, tes, ft2s):
+    """
+    Combine data across echoes using weighted summation according to voxel-
+    (and sometimes volume-) wise estimates of T2*.
+
+    Parameters
+    ----------
+    data : (M x E x T) array_like
+        Masked data.
+    tes : (1 x E) array_like
+        Echo times in milliseconds.
+    ft2s : (M [x T] X 1) array_like
+        Either voxel-wise or voxel- and volume-wise estimates of T2*.
+
+    Returns
+    -------
+    combined : (M x T) :obj:`numpy.ndarray`
+        Data combined across echoes according to T2* estimates.
+    """
+    RepLGR.info("Multi-echo data were then optimally combined using the "
+                "T2* combination method (Posse et al., 1999).")
+    RefLGR.info("Posse, S., Wiese, S., Gembris, D., Mathiak, K., Kessler, "
+                "C., Grosse‐Ruyken, M. L., ... & Kiselev, V. G. (1999). "
+                "Enhancement of BOLD‐contrast sensitivity by single‐shot "
+                "multi‐echo functional MR imaging. Magnetic Resonance in "
+                "Medicine: An Official Journal of the International Society "
+                "for Magnetic Resonance in Medicine, 42(1), 87-97.")
+    n_vols = data.shape[-1]
+    alpha = (tes / ft2s) * np.exp(-tes / ft2s)
+    if alpha.ndim == 2:
+        # Voxel-wise T2 estimates
+        alpha = np.tile(alpha[:, :, np.newaxis], (1, 1, n_vols))
+    elif alpha.ndim == 3:
+        # Voxel- and volume-wise T2 estimates
+        # alpha is currently (S, T, E) but should be (S, E, T) like mdata
+        alpha = np.swapaxes(alpha, 1, 2)
+
+        # If all values across echos are 0, set to 1 to avoid
+        # divide-by-zero errors
+        ax0_idx, ax2_idx = np.where(np.all(alpha == 0, axis=1))
+        alpha[ax0_idx, :, ax2_idx] = 1.
+    combined = np.sum(data * alpha, axis=1)
+    return combined
+
+
+@due.dcite(Doi('10.1002/(SICI)1522-2594(199907)42:1<87::AID-MRM13>3.0.CO;2-O'),
+           description='T2* method of combining data across echoes using '
+                       'monoexponential equation.')
 def _combine_t2s(data, tes, ft2s):
     """
     Combine data across echoes using weighted averaging according to voxel-
@@ -149,7 +197,7 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
                          'voxels/samples: {0} != {1}'.format(mask.shape[0],
                                                              data.shape[0]))
 
-    if combmode not in ['t2s', 'paid']:
+    if combmode not in ['t2s', 'paid', 't2s_summation']:
         raise ValueError("Argument 'combmode' must be either 't2s' or 'paid'")
     elif combmode == 't2s' and t2s is None:
         raise ValueError("Argument 't2s' must be supplied if 'combmode' is "
@@ -165,6 +213,16 @@ def make_optcom(data, tes, mask, t2s=None, combmode='t2s', verbose=True):
         LGR.info('Optimally combining data with parallel-acquired inhomogeneity '
                  'desensitized (PAID) method')
         combined = _combine_paid(data, tes)
+    elif combmode == 't2s_summation':
+        if t2s.ndim == 1:
+            msg = 'Optimally combining data with voxel-wise T2* estimates'
+        else:
+            msg = ('Optimally combining data with voxel- and volume-wise T2* '
+                   'estimates')
+        t2s = t2s[mask, ..., np.newaxis]  # mask out empty voxels/samples
+
+        LGR.info(msg)
+        combined = _combine_t2s_summation(data, tes, t2s)
     else:
         if t2s.ndim == 1:
             msg = 'Optimally combining data with voxel-wise T2* estimates'
