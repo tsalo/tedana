@@ -52,7 +52,7 @@
                 "metric2": "countsig in T2clusters"
             },
             "kwargs": {
-                "log_extra_info": "Reject if countsig_in S0clusters > T2clusters",
+                "log_extra_info": "Reject if the number of significant voxels in the component's S0 map is greater than in the T2* map",
                 "log_extra_report": "",
                 "metric2_scale": 1
             }
@@ -67,7 +67,7 @@
                 "metric2": "DICE_FT2"
             },
             "kwargs": {
-                "log_extra_info": "Reject if DICE S0>T2",
+                "log_extra_info": "Reject if the Dice Similarity Index (DSI) between the component's thresholded S0 map and its thresholded Z-map is greater than the DSI between its T2* and Z maps.",
                 "log_extra_report": "",
                 "metric2_scale": 1
             }

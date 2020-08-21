@@ -244,9 +244,6 @@ class DecisionTree:
             (i.e., accepted, rejected, or ignored) for each component
         nodes : :obj:`dict`
             Nodes used in decision tree with updated information from run-time
-
-
-
         """
 
         # this will crash the program with an error message if not all
@@ -280,6 +277,9 @@ class DecisionTree:
         return self.comptable, self.nodes
 
     def check_necessary_metrics(self):
+        """
+        Determine if necessary metrics for decision tree are present in inputs.
+        """
         used_metrics = set()
         for ii, node in enumerate(self.nodes):
             fcn = getattr(selection_nodes, node['functionname'])
@@ -298,24 +298,29 @@ class DecisionTree:
         return used_metrics
 
     def check_null(self, params, fcn):
+        """
+        Check that each parameter for each node is defined.
+        """
         for key, val in params.items():
             if val is None:
                 try:
                     params[key] = getattr(self, key)
                 except AttributeError:
-                    raise ValueError('Parameter {} is required in node {}, but not defined. '
-                                     .format(key, fcn) + 'If {} is dataset specific, it should be '
-                                     'defined in the '.format(key) + ' initialization of '
-                                     'DecisionTree. If it is fixed regardless of dataset, it '
-                                     'should be defined in the json file that defines the '
-                                     'decision tree.')
+                    raise ValueError(
+                        'Parameter {0} is required in node {1}, but not defined. '
+                        'If {0} is dataset specific, it should be defined in the '
+                        'initialization of DecisionTree. '
+                        'If it is fixed regardless of dataset, it should be defined '
+                        'in the json file that defines the decision tree.'.format(key, fcn))
 
         return params
 
     def are_only_necessary_metrics_used(self, used_metrics):
-        # This function checks if all metrics that are declared as necessary
+        """
+        This function checks if all metrics that are declared as necessary
         # are actually used and if any used_metrics weren't explicitly declared
         # If either of these happen, a warning is added to the logger
+        """
         not_declared = set(used_metrics) - set(self.metrics)
         not_used = set(self.metrics) - set(used_metrics)
         if len(not_declared) > 0:

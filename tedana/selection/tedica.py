@@ -73,6 +73,10 @@ def manual_selection(comptable, acc=None, rej=None):
     return comptable
 
 
+def minimal_tree(comptable, n_echos, n_vols):
+    pass
+
+
 def kundu_selection_v2(comptable, n_echos, n_vols):
     """
     Classify components as "accepted," "rejected," or "ignored" based on
