@@ -15,6 +15,15 @@ RefLGR = logging.getLogger('REFERENCES')
 # Functions that are used for interacting with comptable
 
 
+def grab_columns(comptable, columns=()):
+    column_data = {c: comptable[c].values for c in columns}
+    return column_data
+
+
+def update_df(comptable, **kwargs):
+    return comptable
+
+
 def selectcomps2use(comptable, decide_comps):
     """
     Give a list of components that fit a classification types
