@@ -42,8 +42,7 @@ def load_image(data):
 
 
 def make_adaptive_mask(data, mask=None, getsum=False, threshold=1):
-    """
-    Makes map of `data` specifying longest echo a voxel can be sampled with
+    """Estimate an integer-valued mask reflecting the last echo with good signal for each voxel.
 
     Parameters
     ----------
@@ -51,8 +50,8 @@ def make_adaptive_mask(data, mask=None, getsum=False, threshold=1):
         Multi-echo data array, where `S` is samples, `E` is echos, and `T` is
         time
     mask : :obj:`str` or img_like, optional
-        Binary mask for voxels to consider in TE Dependent ANAlysis. Default is
-        to generate mask from data with good signal across echoes
+        Prior binary mask for voxels to consider in TE Dependent ANAlysis.
+        Default is to generate mask from data with good signal across echoes
     getsum : :obj:`bool`, optional
         Return `masksum` in addition to `mask`. Default: False
     threshold : :obj:`int`, optional
@@ -64,9 +63,23 @@ def make_adaptive_mask(data, mask=None, getsum=False, threshold=1):
     mask : (S,) :obj:`numpy.ndarray`
         Boolean array of voxels that have sufficient signal in at least one
         echo
-    masksum : (S,) :obj:`numpy.ndarray`
-        Valued array indicating the number of echos with sufficient signal in a
-        given voxel. Only returned if `getsum = True`
+    echo_mask : (S x E) :obj:`numpy.ndarray`
+        Boolean array indicating which echoes have sufficient signal for each
+        voxel.
+
+    Notes
+    -----
+    This function works along the following steps:
+    1. Average input data over time, to produce echo-wise maps of mean values.
+    2. Determine the value associated with the 33rd percentile of the first echo's
+       mean map, after removing voxels with a value of zero.
+    3. Identify all voxels with value at 33rd percentile in first echo.
+    4. Extract values from all echoes for selected voxels.
+    5. Divide selected values by 3.
+    6. Identify remaining voxel with the highest signal
+       (largest value after summing across echoes).
+    7. Using echo-wise signal from this voxel as threshold, identify voxel/echo
+       combinations with lower than the associated signal threshold.
     """
     RepLGR.info("An adaptive mask was then generated, in which each voxel's "
                 "value reflects the number of echoes with 'good' data.")
@@ -78,41 +91,37 @@ def make_adaptive_mask(data, mask=None, getsum=False, threshold=1):
     # get 33rd %ile of `first_echo` and find corresponding index
     # NOTE: percentile is arbitrary
     perc = np.percentile(first_echo, 33, interpolation='higher')
-    perc_val = (echo_means[:, 0] == perc)
+    voxels_with_perc_val = (echo_means[:, 0] == perc)
 
     # extract values from all echos at relevant index
     # NOTE: threshold of 1/3 voxel value is arbitrary
-    lthrs = np.squeeze(echo_means[perc_val].T) / 3
+    lthrs = np.squeeze(echo_means[voxels_with_perc_val, :].T) / 3
 
-    # if multiple samples were extracted per echo, keep the one w/the highest signal
+    # if multiple samples were extracted per echo, keep the one w/ the highest signal
     if lthrs.ndim > 1:
-        lthrs = lthrs[:, lthrs.sum(axis=0).argmax()]
+        keep_voxel = lthrs.sum(axis=0).argmax()
+        lthrs = lthrs[:, keep_voxel]
 
     # determine samples where absolute value is greater than echo-specific thresholds
     # and count # of echos that pass criterion
-    masksum = (np.abs(echo_means) > lthrs).sum(axis=-1)
+    echo_mask = echo_means <= lthrs
 
-    if mask is None:
-        # make it a boolean mask to (where we have at least `threshold` echoes with good signal)
-        mask = (masksum >= threshold).astype(bool)
-        masksum[masksum < threshold] = 0
-    else:
+    if mask is not None:
         # if the user has supplied a binary mask
         mask = load_image(mask).astype(bool)
-        masksum = masksum * mask
+        echo_mask[~mask, :] = False
+
         # reduce mask based on masksum
         # TODO: Use visual report to make checking the reduced mask easier
-        if np.any(masksum[mask] < threshold):
-            n_bad_voxels = np.sum(masksum[mask] < threshold)
+        if np.any(np.sum(echo_mask[mask, :], axis=1) < threshold):
+            n_bad_voxels = np.sum(np.sum(echo_mask[mask, :], axis=1) < threshold)
             LGR.warning('{0} voxels in user-defined mask do not have good '
                         'signal. Removing voxels from mask.'.format(n_bad_voxels))
-            masksum[masksum < threshold] = 0
-            mask = masksum.astype(bool)
 
-    if getsum:
-        return mask, masksum
+    mask = (np.sum(echo_mask, axis=1) >= threshold).astype(bool)
+    echo_mask[~mask, :] = False
 
-    return mask
+    return mask, echo_mask
 
 
 def unmask(data, mask):

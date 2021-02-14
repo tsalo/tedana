@@ -119,6 +119,36 @@ def fit_monoexponential(data_cat, echo_times, adaptive_mask, report=True):
     t2s_limited, s0_limited, t2s_full, s0_full = fit_loglinear(
         data_cat, echo_times, adaptive_mask, report=False)
 
+    unique_patterns = np.unique(adaptive_mask, axis=0)
+    for pattern in unique_patterns:
+        pattern_idx = np.where((adaptive_mask == pattern).all(axis=1))[0]
+        selected_data = data_cat[pattern_idx, pattern, :]
+        selected_echo_times = echo_times[pattern]
+        data_2d = selected_data.reshape(len(selected_data), -1).T
+        echo_times_1d = np.repeat(echo_times[:echo_num], n_vols)
+
+        # perform a monoexponential fit of echo times against MR signal
+        # using loglin estimates as initial starting points for fit
+        fail_count = 0
+        for voxel in voxel_idx:
+            try:
+                popt, cov = scipy.optimize.curve_fit(
+                    monoexponential, echo_times_1d, data_2d[:, voxel],
+                    p0=(s0_full[voxel], t2s_full[voxel]),
+                    bounds=((np.min(data_2d[:, voxel]), 0),
+                            (np.inf, np.inf)))
+                s0_full[voxel] = popt[0]
+                t2s_full[voxel] = popt[1]
+            except (RuntimeError, ValueError):
+                # If curve_fit fails to converge, fall back to loglinear estimate
+                fail_count += 1
+
+        if fail_count:
+            fail_percent = 100 * fail_count / len(voxel_idx)
+            LGR.debug('With {0} echoes, monoexponential fit failed on {1}/{2} '
+                      '({3:.2f}%) voxel(s), used log linear estimate '
+                      'instead'.format(echo_num, fail_count, len(voxel_idx), fail_percent))
+
     echos_to_run = np.unique(adaptive_mask)
     # When there is one good echo, use two
     if 1 in echos_to_run:
