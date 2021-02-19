@@ -5,7 +5,7 @@ import logging
 
 import numpy as np
 import nibabel as nib
-from scipy import ndimage
+from scipy import ndimage, stats
 from nilearn._utils import check_niimg
 from sklearn.utils import check_array
 
@@ -104,7 +104,25 @@ def make_adaptive_mask(data, mask=None, getsum=False, threshold=1):
 
     # determine samples where absolute value is greater than echo-specific thresholds
     # and count # of echos that pass criterion
-    echo_mask = echo_means <= lthrs
+    echo_mask = echo_means > lthrs
+    LGR.warning(echo_mask.shape)
+    LGR.warning(echo_mask.sum(axis=0))
+
+    imask = np.zeros(data.shape[:2], dtype=bool)
+    for i_echo in range(data.shape[1]):
+        perc98 = stats.scoreatpercentile(
+            data[:, i_echo, :].flatten(),
+            98,
+            interpolation_method='lower'
+        )
+        lthr, hthr = 0.001 * perc98, 5 * perc98
+        LGR.warning('Eimask threshold boundaries: '
+                    '{:.03f} {:.03f}'.format(lthr, hthr))
+        echo_mean = echo_means[:, i_echo]
+        imask[np.logical_and(echo_mean > lthr, echo_mean < hthr), i_echo] = True
+
+    echo_mask = np.logical_and(echo_mask, imask)
+    LGR.warning(echo_mask.sum(axis=0))
 
     if mask is not None:
         # if the user has supplied a binary mask
@@ -118,8 +136,9 @@ def make_adaptive_mask(data, mask=None, getsum=False, threshold=1):
             LGR.warning('{0} voxels in user-defined mask do not have good '
                         'signal. Removing voxels from mask.'.format(n_bad_voxels))
 
-    mask = (np.sum(echo_mask, axis=1) >= threshold).astype(bool)
-    echo_mask[~mask, :] = False
+    # mask = (np.sum(echo_mask, axis=1) >= threshold).astype(bool)
+    mask = np.sum(echo_mask, axis=1).astype(bool)
+    # echo_mask[~mask, :] = False
 
     return mask, echo_mask
 

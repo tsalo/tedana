@@ -116,100 +116,49 @@ def fit_monoexponential(data_cat, echo_times, adaptive_mask, report=True):
     # fit_data = np.mean(data_cat, axis=2)
     # fit_sigma = np.std(data_cat, axis=2)
 
-    t2s_limited, s0_limited, t2s_full, s0_full = fit_loglinear(
+    t2s_full, s0_full = fit_loglinear(
         data_cat, echo_times, adaptive_mask, report=False)
 
     unique_patterns = np.unique(adaptive_mask, axis=0)
+    unique_patterns = [p for p in unique_patterns if np.sum(p) >= 2]
+
     for pattern in unique_patterns:
+        echo_idx = np.where(pattern)[0]
         pattern_idx = np.where((adaptive_mask == pattern).all(axis=1))[0]
         selected_data = data_cat[pattern_idx, pattern, :]
         selected_echo_times = echo_times[pattern]
-        data_2d = selected_data.reshape(len(selected_data), -1).T
-        echo_times_1d = np.repeat(echo_times[:echo_num], n_vols)
+        data_2d = selected_data.reshape(selected_data.shape[0], -1).T
+        echo_times_1d = np.repeat(selected_echo_times, n_vols)
 
         # perform a monoexponential fit of echo times against MR signal
         # using loglin estimates as initial starting points for fit
         fail_count = 0
-        for voxel in voxel_idx:
+        for i_voxel, voxel_idx in enumerate(pattern_idx):
             try:
                 popt, cov = scipy.optimize.curve_fit(
-                    monoexponential, echo_times_1d, data_2d[:, voxel],
-                    p0=(s0_full[voxel], t2s_full[voxel]),
-                    bounds=((np.min(data_2d[:, voxel]), 0),
+                    monoexponential, echo_times_1d, data_2d[:, i_voxel],
+                    p0=(s0_full[voxel_idx], t2s_full[voxel_idx]),
+                    bounds=((np.min(data_2d[:, i_voxel]), 0),
                             (np.inf, np.inf)))
-                s0_full[voxel] = popt[0]
-                t2s_full[voxel] = popt[1]
+                s0_full[voxel_idx] = popt[0]
+                t2s_full[voxel_idx] = popt[1]
             except (RuntimeError, ValueError):
                 # If curve_fit fails to converge, fall back to loglinear estimate
                 fail_count += 1
 
         if fail_count:
-            fail_percent = 100 * fail_count / len(voxel_idx)
-            LGR.debug('With {0} echoes, monoexponential fit failed on {1}/{2} '
-                      '({3:.2f}%) voxel(s), used log linear estimate '
-                      'instead'.format(echo_num, fail_count, len(voxel_idx), fail_percent))
+            fail_percent = 100 * fail_count / selected_data.shape[0]
+            LGR.debug(
+                "With echoes {0}, monoexponential fit failed on {1}/{2} ({3:.2f}%) voxel(s), "
+                "used log linear estimate instead".format(
+                        ", ".join(echo_idx),
+                        fail_count,
+                        selected_data.shape[0],
+                        fail_percent
+                )
+            )
 
-    echos_to_run = np.unique(adaptive_mask)
-    # When there is one good echo, use two
-    if 1 in echos_to_run:
-        echos_to_run = np.sort(np.unique(np.append(echos_to_run, 2)))
-    echos_to_run = echos_to_run[echos_to_run >= 2]
-
-    t2s_asc_maps = np.zeros([n_samp, len(echos_to_run)])
-    s0_asc_maps = np.zeros([n_samp, len(echos_to_run)])
-    echo_masks = np.zeros([n_samp, len(echos_to_run)], dtype=bool)
-
-    for i_echo, echo_num in enumerate(echos_to_run):
-        if echo_num == 2:
-            # Use the first two echoes for cases where there are
-            # either one or two good echoes
-            voxel_idx = np.where(adaptive_mask <= echo_num)[0]
-        else:
-            voxel_idx = np.where(adaptive_mask == echo_num)[0]
-
-        # Create echo masks to assign values to limited vs full maps later
-        echo_mask = np.squeeze(echo_masks[..., i_echo])
-        echo_mask[adaptive_mask == echo_num] = True
-        echo_masks[..., i_echo] = echo_mask
-
-        data_2d = data_cat[:, :echo_num, :].reshape(len(data_cat), -1).T
-        echo_times_1d = np.repeat(echo_times[:echo_num], n_vols)
-
-        # perform a monoexponential fit of echo times against MR signal
-        # using loglin estimates as initial starting points for fit
-        fail_count = 0
-        for voxel in voxel_idx:
-            try:
-                popt, cov = scipy.optimize.curve_fit(
-                    monoexponential, echo_times_1d, data_2d[:, voxel],
-                    p0=(s0_full[voxel], t2s_full[voxel]),
-                    bounds=((np.min(data_2d[:, voxel]), 0),
-                            (np.inf, np.inf)))
-                s0_full[voxel] = popt[0]
-                t2s_full[voxel] = popt[1]
-            except (RuntimeError, ValueError):
-                # If curve_fit fails to converge, fall back to loglinear estimate
-                fail_count += 1
-
-        if fail_count:
-            fail_percent = 100 * fail_count / len(voxel_idx)
-            LGR.debug('With {0} echoes, monoexponential fit failed on {1}/{2} '
-                      '({3:.2f}%) voxel(s), used log linear estimate '
-                      'instead'.format(echo_num, fail_count, len(voxel_idx), fail_percent))
-
-        t2s_asc_maps[:, i_echo] = t2s_full
-        s0_asc_maps[:, i_echo] = s0_full
-
-    # create limited T2* and S0 maps
-    t2s_limited = utils.unmask(t2s_asc_maps[echo_masks], adaptive_mask > 1)
-    s0_limited = utils.unmask(s0_asc_maps[echo_masks], adaptive_mask > 1)
-
-    # create full T2* maps with S0 estimation errors
-    t2s_full, s0_full = t2s_limited.copy(), s0_limited.copy()
-    t2s_full[adaptive_mask == 1] = t2s_asc_maps[adaptive_mask == 1, 0]
-    s0_full[adaptive_mask == 1] = s0_asc_maps[adaptive_mask == 1, 0]
-
-    return t2s_limited, s0_limited, t2s_full, s0_full
+    return t2s_full, s0_full
 
 
 def fit_loglinear(data_cat, echo_times, adaptive_mask, report=True):
@@ -260,56 +209,33 @@ def fit_loglinear(data_cat, echo_times, adaptive_mask, report=True):
                     "and S0.")
     n_samp, n_echos, n_vols = data_cat.shape
 
-    echos_to_run = np.unique(adaptive_mask)
-    # When there is one good echo, use two
-    if 1 in echos_to_run:
-        echos_to_run = np.sort(np.unique(np.append(echos_to_run, 2)))
-    echos_to_run = echos_to_run[echos_to_run >= 2]
+    s0_full = np.empty(n_samp)
+    t2s_full = np.empty(n_samp)
 
-    t2s_asc_maps = np.zeros([n_samp, len(echos_to_run)])
-    s0_asc_maps = np.zeros([n_samp, len(echos_to_run)])
-    echo_masks = np.zeros([n_samp, len(echos_to_run)], dtype=bool)
+    unique_patterns = np.unique(adaptive_mask, axis=0)
+    unique_patterns = [p for p in unique_patterns if np.sum(p) >= 2]
 
-    for i_echo, echo_num in enumerate(echos_to_run):
-        if echo_num == 2:
-            # Use the first two echoes for cases where there are
-            # either one or two good echoes
-            voxel_idx = np.where(np.logical_and(adaptive_mask > 0, adaptive_mask <= echo_num))[0]
-        else:
-            voxel_idx = np.where(adaptive_mask == echo_num)[0]
-
-        # Create echo masks to assign values to limited vs full maps later
-        echo_mask = np.squeeze(echo_masks[..., i_echo])
-        echo_mask[adaptive_mask == echo_num] = True
-        echo_masks[..., i_echo] = echo_mask
-
-        # perform log linear fit of echo times against MR signal
-        # make DV matrix: samples x (time series * echos)
-        data_2d = data_cat[voxel_idx, :echo_num, :].reshape(len(voxel_idx), -1).T
+    for pattern in unique_patterns:
+        LGR.warning("Fitting pattern {}".format(pattern))
+        echo_idx = np.where(pattern)[0]
+        pattern_idx = np.where((adaptive_mask == pattern).all(axis=1))[0]
+        LGR.warning(pattern_idx.shape)
+        LGR.warning(echo_idx.shape)
+        LGR.warning(data_cat.shape)
+        selected_data = data_cat[pattern_idx, ...][:, echo_idx, :]
+        data_2d = selected_data.reshape(selected_data.shape[0], -1).T
         log_data = np.log(np.abs(data_2d) + 1)
 
         # make IV matrix: intercept/TEs x (time series * echos)
-        x = np.column_stack([np.ones(echo_num), [-te for te in echo_times[:echo_num]]])
+        x = np.column_stack([np.ones(int(np.sum(pattern))), [-te for te in echo_times[echo_idx]]])
         X = np.repeat(x, n_vols, axis=0)
 
         # Log-linear fit
         betas = np.linalg.lstsq(X, log_data, rcond=None)[0]
-        t2s = 1. / betas[1, :].T
-        s0 = np.exp(betas[0, :]).T
+        s0_full[pattern_idx] = 1. / betas[1, :].T
+        t2s_full[pattern_idx] = np.exp(betas[0, :]).T
 
-        t2s_asc_maps[voxel_idx, i_echo] = t2s
-        s0_asc_maps[voxel_idx, i_echo] = s0
-
-    # create limited T2* and S0 maps
-    t2s_limited = utils.unmask(t2s_asc_maps[echo_masks], adaptive_mask > 1)
-    s0_limited = utils.unmask(s0_asc_maps[echo_masks], adaptive_mask > 1)
-
-    # create full T2* maps with S0 estimation errors
-    t2s_full, s0_full = t2s_limited.copy(), s0_limited.copy()
-    t2s_full[adaptive_mask == 1] = t2s_asc_maps[adaptive_mask == 1, 0]
-    s0_full[adaptive_mask == 1] = s0_asc_maps[adaptive_mask == 1, 0]
-
-    return t2s_limited, s0_limited, t2s_full, s0_full
+    return t2s_full, s0_full
 
 
 def fit_decay(data, tes, mask, adaptive_mask, fittype, report=True):
@@ -383,30 +309,23 @@ def fit_decay(data, tes, mask, adaptive_mask, fittype, report=True):
     adaptive_mask_masked = adaptive_mask[mask]
 
     if fittype == 'loglin':
-        t2s_limited, s0_limited, t2s_full, s0_full = fit_loglinear(
+        t2s_full, s0_full = fit_loglinear(
             data_masked, tes, adaptive_mask_masked, report=report)
     elif fittype == 'curvefit':
-        t2s_limited, s0_limited, t2s_full, s0_full = fit_monoexponential(
+        t2s_full, s0_full = fit_monoexponential(
             data_masked, tes, adaptive_mask_masked, report=report)
     else:
         raise ValueError('Unknown fittype option: {}'.format(fittype))
 
-    t2s_limited[np.isinf(t2s_limited)] = 500.  # why 500?
-    # let's get rid of negative values, but keep zeros where limited != full
-    t2s_limited[(adaptive_mask_masked > 1) & (t2s_limited <= 0)] = 1.
-    t2s_limited = _apply_t2s_floor(t2s_limited, tes)
-    s0_limited[np.isnan(s0_limited)] = 0.  # why 0?
     t2s_full[np.isinf(t2s_full)] = 500.  # why 500?
     t2s_full[t2s_full <= 0] = 1.  # let's get rid of negative values!
     t2s_full = _apply_t2s_floor(t2s_full, tes)
     s0_full[np.isnan(s0_full)] = 0.  # why 0?
 
-    t2s_limited = utils.unmask(t2s_limited, mask)
-    s0_limited = utils.unmask(s0_limited, mask)
     t2s_full = utils.unmask(t2s_full, mask)
     s0_full = utils.unmask(s0_full, mask)
 
-    return t2s_limited, s0_limited, t2s_full, s0_full
+    return t2s_full, s0_full
 
 
 def fit_decay_ts(data, tes, mask, adaptive_mask, fittype):

@@ -457,16 +457,14 @@ def tedana_workflow(data, tes, out_dir='.', mask=None,
     elif t2smap and not mask:
         LGR.info('Using user-defined T2* map to generate mask')
         t2s_limited_sec = utils.load_image(t2smap)
-        t2s_limited = utils.sec2millisec(t2s_limited_sec)
-        t2s_full = t2s_limited.copy()
-        mask = (t2s_limited != 0).astype(int)
+        t2s_full = utils.sec2millisec(t2s_limited_sec)
+        mask = (t2s_full != 0).astype(int)
     elif t2smap and mask:
         LGR.info('Combining user-defined mask and T2* map to generate mask')
         t2s_limited_sec = utils.load_image(t2smap)
-        t2s_limited = utils.sec2millisec(t2s_limited_sec)
-        t2s_full = t2s_limited.copy()
+        t2s_full = utils.sec2millisec(t2s_limited_sec)
         mask = utils.load_image(mask)
-        mask[t2s_limited == 0] = 0  # reduce mask based on T2* map
+        mask[t2s_full == 0] = 0  # reduce mask based on T2* map
     else:
         LGR.info('Computing EPI mask from first echo')
         first_echo_img = io.new_nii_like(ref_img, catd[:, 0, :])
@@ -475,24 +473,24 @@ def tedana_workflow(data, tes, out_dir='.', mask=None,
                     "nilearn's compute_epi_mask function.")
 
     # Create an adaptive mask with at least 3 good echoes.
-    mask, masksum = utils.make_adaptive_mask(catd, mask=mask, getsum=True, threshold=3)
+    mask, masksum = utils.make_adaptive_mask(catd, mask=None, getsum=True, threshold=3)
     LGR.debug('Retaining {}/{} samples'.format(mask.sum(), n_samp))
-    io.filewrite(masksum, op.join(out_dir, 'adaptive_mask.nii'), ref_img)
+    io.filewrite(masksum.astype(int), op.join(out_dir, 'adaptive_mask.nii'), ref_img)
 
     if t2smap is None:
         LGR.info('Computing T2* map')
-        t2s_limited, s0_limited, t2s_full, s0_full = decay.fit_decay(
+        t2s_full, s0_full = decay.fit_decay(
             catd, tes, mask, masksum, fittype)
 
         # set a hard cap for the T2* map
         # anything that is 10x higher than the 99.5 %ile will be reset to 99.5 %ile
-        cap_t2s = stats.scoreatpercentile(t2s_limited.flatten(), 99.5,
+        cap_t2s = stats.scoreatpercentile(t2s_full.flatten(), 99.5,
                                           interpolation_method='lower')
         LGR.debug('Setting cap on T2* map at {:.5f}s'.format(
             utils.millisec2sec(cap_t2s)))
-        t2s_limited[t2s_limited > cap_t2s * 10] = cap_t2s
-        io.filewrite(utils.millisec2sec(t2s_limited), op.join(out_dir, 't2sv.nii'), ref_img)
-        io.filewrite(s0_limited, op.join(out_dir, 's0v.nii'), ref_img)
+        t2s_full[t2s_full > cap_t2s * 10] = cap_t2s
+        io.filewrite(utils.millisec2sec(t2s_full), op.join(out_dir, 't2sv.nii'), ref_img)
+        io.filewrite(s0_full, op.join(out_dir, 's0v.nii'), ref_img)
 
         if verbose:
             io.filewrite(utils.millisec2sec(t2s_full), op.join(out_dir, 't2svG.nii'), ref_img)

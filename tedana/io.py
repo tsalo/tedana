@@ -312,6 +312,7 @@ def new_nii_like(ref_img, data, affine=None, copy_header=True):
 
     ref_img = check_niimg(ref_img)
     newdata = data.reshape(ref_img.shape[:3] + data.shape[1:])
+
     if '.nii' not in ref_img.valid_exts:
         # this is rather ugly and may lose some information...
         nii = nib.Nifti1Image(newdata, affine=ref_img.affine,
