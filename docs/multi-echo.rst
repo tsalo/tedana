@@ -560,6 +560,7 @@ This list is not necessarily up to date, so please check out OpenNeuro to potent
 * `Cambridge Centre for Ageing Neuroscience (Cam-CAN)`_
 * `rt-me-fMRI - A task and resting state dataset for real-time, multi-echo fMRI methods development and validation`_
 * `EuskalIBUR`_
+* `Le Petit Prince`_
 
 .. _Multi-echo fMRI replication sample of autobiographical memory, prospection and theory of mind reasoning tasks: https://openneuro.org/datasets/ds000210/
 .. _Multi-echo Cambridge: https://openneuro.org/datasets/ds000258
@@ -568,6 +569,7 @@ This list is not necessarily up to date, so please check out OpenNeuro to potent
 .. _Cambridge Centre for Ageing Neuroscience (Cam-CAN): https://camcan-archive.mrc-cbu.cam.ac.uk/dataaccess/
 .. _rt-me-fMRI - A task and resting state dataset for real-time, multi-echo fMRI methods development and validation: https://doi.org/10.34894/R1TNL8
 .. _EuskalIBUR: https://openneuro.org/datasets/ds003192
+.. _Le Petit Prince: https://openneuro.org/datasets/ds003643
 
 
 .. _spreadsheet of publications:
