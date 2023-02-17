@@ -105,7 +105,7 @@ tedana is intended to be a community of multi-echo users. The primary resource
 is the github repository and related documentation. In addition, the tedana
 group will attempt to answer multi-echo related questions on NeuroStars
 (`multi-echo tag <https://neurostars.org/tag/multi-echo>`_ or
-`tedana tag <https://neurostars.org/tag/tedana>`_).
+`tedana tag <https://neurostars.org/tags/c/software-support/234/tedana>`_).
 
 
 What tedana isn’t
