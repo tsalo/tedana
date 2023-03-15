@@ -112,8 +112,7 @@ exclude = '''
     | build
     | dist
   )/
-  | get_version.py
-  | versioneer.py
+  | tedana/_version.py
 )
 '''
 
@@ -125,6 +124,7 @@ multi_line_output = 3
 max-line-length = 99
 exclude = [
     "*build/",
+    "tedana/_version.py",
 ]
 ignore = ["E203", "E402", "W503"]
 per-file-ignores = [
