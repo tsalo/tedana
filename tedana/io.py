@@ -359,9 +359,9 @@ class InputHarvester:
     }
 
     def __init__(self, path):
-        self._full_path = path
-        self._base_dir = op.dirname(path)
-        self._registry = load_json(path)
+        self._full_path = op.abspath(path)
+        self._base_dir = op.dirname(self._full_path)
+        self._registry = load_json(self._full_path)
 
     def get_file_path(self, description):
         if description in self._registry.keys():
@@ -371,7 +371,6 @@ class InputHarvester:
 
     def get_file_contents(self, description):
         """Get file contents.
-
         Notes
         -----
         Since we restrict to just these three types, this function should always return.
@@ -388,6 +387,10 @@ class InputHarvester:
         d = self._registry
         d["root"] = self._base_dir
         return d
+
+
+def versiontuple(v):
+    return tuple(map(int, (v.split("."))))
 
 
 def get_fields(name):
