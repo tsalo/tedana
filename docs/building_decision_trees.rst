@@ -310,7 +310,7 @@ properly execute.
 In :mod:`~tedana.selection.selection_nodes`,
 :func:`~tedana.selection.selection_nodes.manual_classify`,
 :func:`~tedana.selection.selection_nodes.dec_left_op_right`,
-and :func:`~tedana.selection.selection_nodes.calc_kappa_rho_elbows_kundu`
+and :func:`~tedana.selection.selection_nodes.calc_kappa_elbow`
 are good examples for how to meet these expectations.
 
 Create a dictionary called "outputs" that includes key fields that should be recorded.
