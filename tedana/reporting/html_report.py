@@ -1,4 +1,5 @@
 """Build HTML reports for tedana."""
+
 import logging
 import os
 from os.path import join as opj
