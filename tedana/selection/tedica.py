@@ -9,7 +9,9 @@ LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
 
 
-def automatic_selection(component_table, n_echos, n_vols, tree="kundu"):
+def automatic_selection(
+    component_table, n_echos, n_vols, tree="kundu", external_regressor_config=None
+):
     """Classify components based on component table and decision tree type.
 
     Parameters
@@ -20,8 +22,9 @@ def automatic_selection(component_table, n_echos, n_vols, tree="kundu"):
         The number of echoes in this dataset
     tree : :obj:`str`
         The type of tree to use for the ComponentSelector object. Default="kundu"
-    verbose : :obj:`bool`
-        More verbose logging output if True. Default=False
+    external_regressor_config : :obj:`dict`
+        Information describing the external regressors and
+        method to use for fitting and statistical tests
 
     Returns
     -------
@@ -55,12 +58,11 @@ def automatic_selection(component_table, n_echos, n_vols, tree="kundu"):
 
     .. _FAQ: faq.html
     """
-    LGR.info("Performing ICA component selection with Kundu decision tree v2.5")
+    LGR.info(f"Performing ICA component selection with tree: {tree}")
     RepLGR.info(
         "Next, component selection was performed to identify "
         "BOLD (TE-dependent), non-BOLD (TE-independent), and "
-        "uncertain (low-variance) components using the Kundu "
-        "decision tree (v2.5) \\citep{kundu2013integrated}."
+        "uncertain (low-variance) components."
     )
 
     component_table["classification_tags"] = ""
@@ -68,7 +70,12 @@ def automatic_selection(component_table, n_echos, n_vols, tree="kundu"):
         "n_echos": n_echos,
         "n_vols": n_vols,
     }
-    selector = ComponentSelector(tree, component_table, cross_component_metrics=xcomp)
+    selector = ComponentSelector(
+        tree,
+        component_table,
+        cross_component_metrics=xcomp,
+        external_regressor_config=external_regressor_config,
+    )
     selector.select()
     selector.metadata = collect.get_metadata(selector.component_table)
 
