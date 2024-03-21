@@ -454,6 +454,7 @@ def fit_decay(data, tes, mask, adaptive_mask, fittype, report=True):
         Full S0 map. For voxels affected by dropout, with good signal from
         only one echo, the full map uses the S0 estimate from the first two
         echoes.
+    offset : (S,) :obj:`numpy.ndarray` or None
 
     See Also
     --------
@@ -486,6 +487,7 @@ def fit_decay(data, tes, mask, adaptive_mask, fittype, report=True):
     data_masked = data[mask, :, :]
     adaptive_mask_masked = adaptive_mask[mask]
 
+    offset = None
     if fittype == "loglin":
         t2s_limited, s0_limited, t2s_full, s0_full = fit_loglinear(
             data_masked, tes, adaptive_mask_masked, report=report
@@ -522,7 +524,7 @@ def fit_decay(data, tes, mask, adaptive_mask, fittype, report=True):
     LGR.debug(f"Setting cap on T2* map at {cap_t2s * 10:.5f}")
     t2s_limited[t2s_limited > cap_t2s * 10] = cap_t2s
 
-    return t2s_limited, s0_limited, t2s_full, s0_full
+    return t2s_limited, s0_limited, t2s_full, s0_full, offset
 
 
 def fit_decay_ts(data, tes, mask, adaptive_mask, fittype):
@@ -578,7 +580,7 @@ def fit_decay_ts(data, tes, mask, adaptive_mask, fittype):
 
     report = True
     for vol in range(n_vols):
-        t2s_limited, s0_limited, t2s_full, s0_full = fit_decay(
+        t2s_limited, s0_limited, t2s_full, s0_full, _ = fit_decay(
             data[:, :, vol][:, :, None], tes, mask, adaptive_mask, fittype, report=report
         )
         t2s_limited_ts[:, vol] = t2s_limited

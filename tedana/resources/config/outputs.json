@@ -55,6 +55,10 @@
         "orig": "s0v",
         "bidsv1.5.0": "desc-limited_S0map"
     },
+    "offset img": {
+        "orig": "offset",
+        "bidsv1.5.0": "desc-offset_statmap"
+    },
     "whitened img": {
         "orig": "ts_OC_whitened",
         "bidsv1.5.0": "desc-optcom_whitened_bold"

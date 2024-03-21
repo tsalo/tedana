@@ -282,11 +282,11 @@ def t2smap_workflow(
 
     LGR.info("Computing adaptive T2* map")
     if fitmode == "all":
-        (t2s_limited, s0_limited, t2s_full, s0_full) = decay.fit_decay(
+        (t2s_limited, s0_limited, t2s_full, s0_full, offset) = decay.fit_decay(
             catd, tes, mask, masksum, fittype
         )
     else:
-        (t2s_limited, s0_limited, t2s_full, s0_full) = decay.fit_decay_ts(
+        (t2s_limited, s0_limited, t2s_full, s0_full, offset) = decay.fit_decay_ts(
             catd, tes, mask, masksum, fittype
         )
 
@@ -322,6 +322,8 @@ def t2smap_workflow(
         "limited s0 img",
     )
     io_generator.save_file(data_oc, "combined img")
+    if fittype == "zhao":
+        io_generator.save_file(offset, "offset img")
 
     # Write out BIDS-compatible description file
     derivative_metadata = {
