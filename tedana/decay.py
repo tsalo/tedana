@@ -433,7 +433,7 @@ def fit_decay(data, tes, mask, adaptive_mask, fittype, report=True):
         for that voxel. This mask may be thresholded; for example, with values
         less than 3 set to 0.
         For more information on thresholding, see `make_adaptive_mask`.
-    fittype : {loglin, curvefit}
+    fittype : {loglin, curvefit, zhao}
         The type of model fit to use
     report : bool, optional
         Whether to log a description of this step or not. Default is True.

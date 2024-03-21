@@ -88,7 +88,7 @@ def _get_parser():
         "--fittype",
         dest="fittype",
         action="store",
-        choices=["loglin", "curvefit"],
+        choices=["loglin", "curvefit", "zhao"],
         help=(
             "Desired T2*/S0 fitting method. "
             '"loglin" means that a linear model is fit '
@@ -176,7 +176,7 @@ def t2smap_workflow(
     mask : :obj:`str`, optional
         Binary mask of voxels to include in TE Dependent ANAlysis. Must be spatially
         aligned with `data`.
-    fittype : {'loglin', 'curvefit'}, optional
+    fittype : {'loglin', 'curvefit', 'zhao'}, optional
         Monoexponential fitting method.
         'loglin' means to use the the default linear fit to the log of
         the data.

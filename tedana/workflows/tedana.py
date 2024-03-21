@@ -113,7 +113,7 @@ def _get_parser():
         "--fittype",
         dest="fittype",
         action="store",
-        choices=["loglin", "curvefit"],
+        choices=["loglin", "curvefit", "zhao"],
         help=(
             "Desired T2*/S0 fitting method. "
             '"loglin" means that a linear model is fit '
