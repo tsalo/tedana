@@ -1,25 +1,246 @@
 <style type="text/css">
-    .content {
-        padding: 35px 20px 10px 20px;
-        margin-left: 50px;
-        margin-top: 50px;
-        height: 900px;
-    }
-    .about {
-        position: relative;
-        top: -50px;
-        margin-left: 5%;
-        margin-right: 5%;
-        white-space: pre-line;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: larger;
-    }
+  .brainplot {
+    width: 50%;
+    height: auto;
+  }
+
+  .report {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .content {
+    margin-left: 5%;
+    margin-right: 5%;
+    margin-bottom: 150px;
+    height: auto;
+    float: left;
+  }
+
+  .about {
+    position: relative;
+    top: -50px;
+    margin-left: 5%;
+    margin-right: 5%;
+    white-space: pre-line;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: larger;
+    float: left;
+    width: 80%;
+  }
+
+  .references ul {
+    line-height: 150%;
+  }
+
+  .carpet-wrapper {
+    margin-top: 30px;
+  }
+
+  .carpet-plots {
+    float: left;
+  }
+
+  .carpet-plots {
+    margin-left: 5%;
+    margin-right: 5%;
+    margin-bottom: 100px;
+  }
+
+  .carpet-buttons {
+    height: 40px;
+    padding-bottom: 5px;
+  }
+
+  .carpet-image {
+    margin-top: 20px;
+  }
+
+  .info {
+    margin-left: 5%;
+    margin-right: 5%;
+    margin-bottom: 150px;
+    height: auto;
+    float: left;
+  }
+
+  button {
+    margin-right: 15px;
+    width: auto;
+    border-radius: 6px;
+    border-top: none;
+    text-align: center;
+    color: black;
+    padding: 10px;
+    float: left;
+    font-size: 18px;
+    font-weight: 700;
+    height: 40px;
+  }
+
+  button:hover {
+    opacity: 0.8;
+  }
+
+  button:active {
+    width: auto;
+    border-radius: 6px;
+    border-top: none;
+    text-align: center;
+    color: black;
+    padding: 10px;
+    margin-top: 3px;
+    float: left;
+  }
+
+  .blue {
+    background: #8caef9;
+    border-bottom: #6684c6 3px solid;
+    border-left: #6684c6 1px solid;
+    border-right: #6684c6 1px solid;
+  }
+
+  .blue:active {
+    background: #7fa5f8;
+    border-bottom: #6684c6 1px solid;
+    border-left: #6684c8 1px solid;
+    border-right: #6684c6 1px solid;
+  }
+
+  .red {
+    background: #ec5e57;
+    border-bottom: #bb3d36 3px solid;
+    border-left: #bb3d36 1px solid;
+    border-right: #bb3d36 1px solid;
+  }
+
+  .red:active {
+    background: #ea4c44;
+    border-bottom: #bb3d36 1px solid;
+    border-left: #bb3d36 1px solid;
+    border-right: #bb3d36 1px solid;
+  }
+
+  .green {
+    background: #74ca74;
+    border-bottom: #509d51 3px solid;
+    border-left: #509d51 1px solid;
+    border-right: #509d51 1px solid;
+  }
+
+  .green:active {
+    background: #64c465;
+    border-bottom: #509d51 1px solid;
+    border-left: #509d51 1px solid;
+    border-right: #509d51 1px solid;
+  }
+
+  .yellow {
+    background: #f7ce5f;
+    border-bottom: #c5a13e 3px solid;
+    border-left: #c5a13e 1px solid;
+    border-right: #c5a13e 1px solid;
+  }
+
+  .yellow:active {
+    background: #f6c94d;
+    border-bottom: #c5a13e 1px solid;
+    border-left: #c5a13e 1px solid;
+    border-right: #c5a13e 1px solid;
+  }
+
+  td {
+    padding: 0.3rem 1.5rem;
+  }
+
+  pre {
+    width: 60%;
+    white-space: pre-wrap; /* Since CSS 2.1 */
+    white-space: -moz-pre-wrap; /* Mozilla, since 1999 */
+    white-space: -pre-wrap; /* Opera 4-6 */
+    white-space: -o-pre-wrap; /* Opera 7 */
+    word-wrap: break-word; /* Internet Explorer 5.5+ */
+  }
+
+  .code_block {
+    padding: 2em !important;
+    border-radius: 5px;
+  }
 </style>
 <div class="content">
-    $content
+  <h1>ICA components</h1>
+  $content
+</div>
+<div class="carpet-plots">
+  <h1>Carpet plots</h1>
+  <div class="carpet-wrapper">
+    <div class="carpet-buttons">$buttons</div>
+    <div class="carpet-plots-image">
+      <img id="imgCarpetPlot" src="$initialCarpet" />
+    </div>
+  </div>
+</div>
+<div class="carpet-plots">
+  <h1>Adaptive mask</h1>
+  <img id="adaptiveMask" src="$adaptiveMask" style="height: 500px" />
+</div>
+<div class="carpet-plots">
+  <h1>T2* and S0</h1>
+  <h2>T2*</h2>
+  <div class="carpet-plots-image">
+    <img id="t2starBrainPlot" src="$t2starBrainPlot" style="height: 500px" />
+  </div>
+  <div class="carpet-plots-image">
+    <img id="t2starHistogram" src="$t2starHistogram" style="height: 500px" />
+  </div>
+  <h2>S0</h2>
+  <div class="carpet-plots-image">
+    <img id="s0BrainPlot" src="$s0BrainPlot" style="height: 500px" />
+  </div>
+  <div class="carpet-plots-image">
+    <img id="s0Histogram" src="$s0Histogram" style="height: 500px" />
+  </div>
+</div>
+</div>
+<div class="info">
+  <h1>Info</h1>
+  $info
 </div>
 <div class="about">
-    $about
+  <h1>About tedana</h1>
+  $about
 </div>
+<div class="content references">
+  <h1>References</h1>
+  <ul>
+    $references
+  </ul>
+</div>
+
+<script type="text/javascript">
+  function updateCarpetPlot(name) {
+    // Create variable to hold the image source
+    let carpetPlot = "./figures/$prefix";
+
+    if (name == "optcom") {
+      carpetPlot += "carpet_optcom.svg";
+    } else if (name == "denoised") {
+      carpetPlot += "carpet_denoised.svg";
+    } else if (name == "accepted") {
+      carpetPlot += "carpet_accepted.svg";
+    } else if (name == "rejected") {
+      carpetPlot += "carpet_rejected.svg";
+    } else if (name == "denoised_mir") {
+      carpetPlot += "carpet_denoised_mir.svg";
+    } else if (name == "accepted_mir") {
+      carpetPlot += "carpet_accepted_mir.svg";
+    } else if (name == "optcom_nogsr") {
+      carpetPlot += "carpet_optcom_nogsr.svg";
+    }
+
+    // Update the image source
+    document.getElementById("imgCarpetPlot").src = carpetPlot;
+  }
+</script>
 
 $javascript

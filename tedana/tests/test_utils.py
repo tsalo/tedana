@@ -1,21 +1,19 @@
-"""
-Tests for tedana.utils
-"""
+"""Tests for tedana.utils."""
 
-from os.path import join as pjoin, dirname
+import random
+from os.path import dirname
+from os.path import join as pjoin
 
 import nibabel as nib
 import numpy as np
 import pytest
 
-import random
-
-from tedana import (utils, io)
+from tedana import io, utils
 
 rs = np.random.RandomState(1234)
-datadir = pjoin(dirname(__file__), 'data')
-fnames = [pjoin(datadir, 'echo{}.nii.gz'.format(n)) for n in range(1, 4)]
-tes = ['14.5', '38.5', '62.5']
+datadir = pjoin(dirname(__file__), "data")
+fnames = [pjoin(datadir, f"echo{n}.nii.gz") for n in range(1, 4)]
+tes = ["14.5", "38.5", "62.5"]
 
 
 def test_unmask():
@@ -27,10 +25,10 @@ def test_unmask():
         (rs.rand(n_data, 3), float),  # 2D float
         (rs.rand(n_data, 3, 3), float),  # 3D float
         (rs.randint(10, size=(n_data, 3)), int),  # 2D int
-        (rs.randint(10, size=(n_data, 3, 3)), int)  # 3D int
+        (rs.randint(10, size=(n_data, 3, 3)), int),  # 3D int
     ]
 
-    for (input, dtype) in inputs:
+    for input, dtype in inputs:
         out = utils.unmask(input, mask)
         assert out.shape == (100,) + input.shape[1:]
         assert out.dtype == dtype
@@ -61,67 +59,127 @@ def test_andb():
 
     # confirm error raised when dimensions are not the same
     with pytest.raises(ValueError):
-        utils.andb([rs.randint(10, size=(10, 10)),
-                    rs.randint(10, size=(20, 20))])
+        utils.andb([rs.randint(10, size=(10, 10)), rs.randint(10, size=(20, 20))])
 
 
-def test_load_image():
+def test_reshape_niimg():
     fimg = nib.load(fnames[0])
     exp_shape = (64350, 5)
 
     # load filepath to image
-    assert utils.load_image(fnames[0]).shape == exp_shape
+    assert utils.reshape_niimg(fnames[0]).shape == exp_shape
     # load img_like object
-    assert utils.load_image(fimg).shape == exp_shape
+    assert utils.reshape_niimg(fimg).shape == exp_shape
     # load array
-    assert utils.load_image(fimg.get_data()).shape == exp_shape
+    assert utils.reshape_niimg(fimg.get_fdata()).shape == exp_shape
 
 
 def test_make_adaptive_mask():
+    """Test tedana.utils.make_adaptive_mask with different methods."""
     # load data make masks
+    mask_file = pjoin(datadir, "mask.nii.gz")
     data = io.load_data(fnames, n_echos=len(tes))[0]
-    mask, masksum = utils.make_adaptive_mask(data, getsum=True)
 
-    # getsum doesn't change mask values
-    assert np.allclose(mask, utils.make_adaptive_mask(data))
-    # shapes are all the same
+    # Just dropout method
+    mask, masksum = utils.make_adaptive_mask(
+        data,
+        mask=mask_file,
+        threshold=1,
+        methods=["dropout"],
+    )
+
     assert mask.shape == masksum.shape == (64350,)
-    assert np.allclose(mask, (masksum >= 3).astype(bool))
-    # mask has correct # of entries
-    assert mask.sum() == 41749
-    # masksum has correct values
+    assert np.allclose(mask, (masksum >= 1).astype(bool))
+    assert mask.sum() == 49376
     vals, counts = np.unique(masksum, return_counts=True)
     assert np.allclose(vals, np.array([0, 1, 2, 3]))
-    assert np.allclose(counts, np.array([13564, 3977, 5060, 41749]))
+    assert np.allclose(counts, np.array([14974, 3682, 5128, 40566]))
 
-    # test user-defined mask
-    # TODO: Add mask file with no bad voxels to test against
-    mask, masksum = utils.make_adaptive_mask(data, mask=pjoin(datadir,
-                                                              'mask.nii.gz'),
-                                             getsum=True)
-    assert np.allclose(mask, (masksum >= 3).astype(bool))
+    # Just decay method
+    mask, masksum = utils.make_adaptive_mask(
+        data,
+        mask=mask_file,
+        threshold=1,
+        methods=["decay"],
+    )
+
+    assert mask.shape == masksum.shape == (64350,)
+    assert np.allclose(mask, (masksum >= 1).astype(bool))
+    assert mask.sum() == 60985  # This method can't flag first echo as bad
+    vals, counts = np.unique(masksum, return_counts=True)
+    assert np.allclose(vals, np.array([0, 1, 2, 3]))
+    assert np.allclose(counts, np.array([3365, 4365, 5971, 50649]))
+
+    # Dropout and decay methods combined
+    mask, masksum = utils.make_adaptive_mask(
+        data,
+        mask=mask_file,
+        threshold=1,
+        methods=["dropout", "decay"],
+    )
+
+    assert mask.shape == masksum.shape == (64350,)
+    assert np.allclose(mask, (masksum >= 1).astype(bool))
+    assert mask.sum() == 49376
+    vals, counts = np.unique(masksum, return_counts=True)
+    assert np.allclose(vals, np.array([0, 1, 2, 3]))
+    assert np.allclose(counts, np.array([14974, 4386, 5604, 39386]))
+
+    # Adding "none" should have no effect
+    mask, masksum = utils.make_adaptive_mask(
+        data,
+        mask=mask_file,
+        threshold=1,
+        methods=["dropout", "decay", "none"],
+    )
+
+    assert mask.shape == masksum.shape == (64350,)
+    assert np.allclose(mask, (masksum >= 1).astype(bool))
+    assert mask.sum() == 49376
+    vals, counts = np.unique(masksum, return_counts=True)
+    assert np.allclose(vals, np.array([0, 1, 2, 3]))
+    assert np.allclose(counts, np.array([14974, 4386, 5604, 39386]))
+
+    # Just "none"
+    mask, masksum = utils.make_adaptive_mask(data, mask=mask_file, threshold=1, methods=["none"])
+
+    assert mask.shape == masksum.shape == (64350,)
+    assert np.allclose(mask, (masksum >= 1).astype(bool))
+    assert mask.sum() == 60985
+    vals, counts = np.unique(masksum, return_counts=True)
+    assert np.allclose(vals, np.array([0, 1, 2, 3]))
+    assert np.allclose(counts, np.array([3365, 1412, 1195, 58378]))
 
 
 # SMOKE TESTS
 
-def test_smoke_load_image():
-    """
-    ensure that load_image returns reasonable objects with random inputs
-    in the correct format
-    Note: load_image could take in 3D or 4D array
+
+def test_smoke_reshape_niimg():
+    """Ensure that reshape_niimg returns reasonable objects with random inputs.
+
+    in the correct format.
+
+    Note: reshape_niimg could take in 3D or 4D array.
     """
     data_3d = np.random.random((100, 5, 20))
     data_4d = np.random.random((100, 5, 20, 50))
 
-    assert utils.load_image(data_3d) is not None
-    assert utils.load_image(data_4d) is not None
+    assert utils.reshape_niimg(data_3d) is not None
+    assert utils.reshape_niimg(data_4d) is not None
+
+    with pytest.raises(TypeError):
+        utils.reshape_niimg(5)
+
+    with pytest.raises(ValueError):
+        utils.reshape_niimg("/path/to/nonexistent/file")
 
 
 def test_smoke_make_adaptive_mask():
-    """
-    ensure that make_adaptive_mask returns reasonable objects with random inputs
-    in the correct format
-    Note: make_adaptive_mask has optional paramters - mask and getsum
+    """Ensure that make_adaptive_mask returns reasonable objects with random inputs.
+
+    in the correct format.
+
+    Note: make_adaptive_mask has optional paramters - mask and threshold.
     """
     n_samples = 100
     n_echos = 5
@@ -129,18 +187,17 @@ def test_smoke_make_adaptive_mask():
     data = np.random.random((n_samples, n_echos, n_times))
     mask = np.random.randint(2, size=n_samples)
 
-    assert utils.make_adaptive_mask(data) is not None
-    assert utils.make_adaptive_mask(data, mask=mask) is not None  # functions with mask
-    assert utils.make_adaptive_mask(data, getsum=True) is not None  # functions when getsumis true
+    assert utils.make_adaptive_mask(data, mask=mask, methods=["dropout", "decay"]) is not None
 
 
 def test_smoke_unmask():
+    """Ensure that unmask returns reasonable objects with random inputs.
+
+    in the correct format.
+
+    Note: unmask could take in 1D or 2D or 3D arrays.
     """
-    ensure that unmask returns reasonable objects with random inputs
-    in the correct format
-    Note: unmask could take in 1D or 2D or 3D arrays
-    """
-    data_1d = np.random.random((100))
+    data_1d = np.random.random(100)
     data_2d = np.random.random((100, 5))
     data_3d = np.random.random((100, 5, 20))
     mask = np.random.randint(2, size=100)
@@ -151,21 +208,22 @@ def test_smoke_unmask():
 
 
 def test_smoke_dice():
+    """Ensure that dice returns reasonable objects with random inputs.
+
+    in the correct format.
+
+    Note: two arrays must be in the same length.
     """
-    ensure that dice returns reasonable objects with random inputs
-    in the correct format
-    Note: two arrays must be in the same length
-    """
-    arr1 = np.random.random((100))
-    arr2 = np.random.random((100))
+    arr1 = np.random.random(100)
+    arr2 = np.random.random(100)
 
     assert utils.dice(arr1, arr2) is not None
 
 
 def test_smoke_andb():
-    """
-    ensure that andb returns reasonable objects with random inputs
-    in the correct format
+    """Ensure that andb returns reasonable objects with random inputs.
+
+    in the correct format.
     """
     arr = np.random.random((100, 10)).tolist()  # 2D list of "arrays"
 
@@ -173,11 +231,11 @@ def test_smoke_andb():
 
 
 def test_smoke_get_spectrum():
+    """Ensure that get_spectrum returns reasonable objects with random inputs.
+
+    in the correct format.
     """
-    ensure that get_spectrum returns reasonable objects with random inputs
-    in the correct format
-    """
-    data = np.random.random((100))
+    data = np.random.random(100)
     tr = random.random()
 
     spectrum, freqs = utils.get_spectrum(data, tr)
@@ -186,10 +244,11 @@ def test_smoke_get_spectrum():
 
 
 def test_smoke_threshold_map():
-    """
-    ensure that threshold_map returns reasonable objects with random inputs
-    in the correct format
-    Note: using 3D array as img, some parameters are optional and are all tested
+    """Ensure that threshold_map returns reasonable objects with random inputs.
+
+    in the correct format.
+
+    Note: using 3D array as img, some parameters are optional and are all tested.
     """
     img = np.random.random((10, 10, 10))  # 3D array must of of size S
     min_cluster_size = random.randint(1, 100)
@@ -203,22 +262,18 @@ def test_smoke_threshold_map():
     assert utils.threshold_map(img, min_cluster_size, threshold=threshold) is not None
     assert utils.threshold_map(img, min_cluster_size, mask=mask) is not None
     assert utils.threshold_map(img, min_cluster_size, binarize=False) is not None
-    assert utils.threshold_map(img, min_cluster_size, sided='one') is not None
-    assert utils.threshold_map(img, min_cluster_size, sided='bi') is not None
+    assert utils.threshold_map(img, min_cluster_size, sided="one") is not None
+    assert utils.threshold_map(img, min_cluster_size, sided="bi") is not None
 
 
 def test_sec2millisec():
-    """
-    Ensure that sec2millisec returns 1000x the input values.
-    """
+    """Ensure that sec2millisec returns 1000x the input values."""
     assert utils.sec2millisec(5) == 5000
     assert utils.sec2millisec(np.array([5])) == np.array([5000])
 
 
 def test_millisec2sec():
-    """
-    Ensure that millisec2sec returns 1/1000x the input values.
-    """
+    """Ensure that millisec2sec returns 1/1000x the input values."""
     assert utils.millisec2sec(5000) == 5
     assert utils.millisec2sec(np.array([5000])) == np.array([5])
 
