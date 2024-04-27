@@ -21,6 +21,7 @@ from scipy import ndimage
 from sklearn import __version__ as sklearn_version
 from sklearn.utils import check_array
 from threadpoolctl import __version__ as threadpoolctl_version
+from tqdm import trange
 
 LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
@@ -196,12 +197,16 @@ def make_adaptive_mask(data, mask, threshold=1, methods=["dropout"]):
         # Start with every voxel's value==0, increment up the echoes, and
         # change to a new value every time a later good echo is found
         dropout_adaptive_mask = np.zeros(n_samples, dtype=np.int16)
-        for echo_idx in range(n_echos):
-            dropout_adaptive_mask[(np.abs(echo_means[:, echo_idx]) > lthrs[echo_idx])] = (
-                echo_idx + 1
-            )
-
-        adaptive_masks.append(dropout_adaptive_mask)
+        for i_voxel in trange(n_samples):
+            voxel_echo_means = echo_means[i_voxel, :]
+            echo_flags = voxel_echo_means > lthrs
+            good_echos = np.where(echo_flags)[0]
+            for echo_idx in good_echos[::-1]:
+                # If there are 50% or more good echoes up to and including the current good echo,
+                # use that as the adaptive mask value.
+                if np.mean(echo_flags[: echo_idx + 1]) >= 0.5:
+                    dropout_adaptive_mask[i_voxel] = echo_idx + 1
+                    continue
 
         adaptive_masks.append(dropout_adaptive_mask)
 
