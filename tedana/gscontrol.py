@@ -336,6 +336,9 @@ def minimum_image_regression(
     # Remove T1-like global signal from MEHK time series
     mehk_no_t1_gs = mehk_ts - t1_gs_data
 
+    # Remove T1-like global signal from MEHK time series
+    mehk_no_t1_gs = mehk_ts - t1_gs_data
+
     # Make denoised version of T1-corrected time series
     medn_ts = optcom_mean + ((mehk_no_t1_gs + resid) * optcom_std)
     io_generator.save_file(utils.unmask(medn_ts, mask), "mir denoised img")
