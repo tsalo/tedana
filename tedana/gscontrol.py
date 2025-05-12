@@ -19,6 +19,9 @@ def gscontrol_raw(
     n_echos: int,
     io_generator: io.OutputGenerator,
     dtrank: int = 4,
+    adaptive_mask: np.ndarray,
+    tes: np.ndarray,
+    n_independent_echos: int,
 ):
     """Remove global signal from individual echo ``data_cat`` and ``data_optcom`` time series.
 
@@ -41,6 +44,16 @@ def gscontrol_raw(
     dtrank : :obj:`int`, optional
         Specifies degree of Legendre polynomial basis function for estimating
         spatial global signal. Default: 4
+    adaptive_mask : (M,) array_like
+        Adaptive mask, where each voxel's value is the number of echoes with
+        "good signal". Limited to masked voxels.
+        Used to calculate dependence metrics.
+    tes : (E,) array_like
+        Echo times.
+        Used to calculate dependence metrics.
+    n_independent_echos : int
+        Number of independent echos.
+        Used to calculate dependence metrics.
 
     Returns
     -------
@@ -113,8 +126,6 @@ def gscontrol_raw(
     gs_ts = np.linalg.lstsq(np.atleast_2d(gs_spatial).T, data_optcom_masked, rcond=None)[0]
     gs_ts = stats.zscore(gs_ts, axis=None)
 
-    glsig_df = pd.DataFrame(data=gs_ts.T, columns=["global_signal"])
-    io_generator.add_df_to_file(glsig_df, "confounds tsv")
     glbase = np.atleast_2d(np.hstack([gs_ts.T, legendre_arr]))
 
     # Project global signal (but not Legendre bases) out of optimally combined data
@@ -143,6 +154,39 @@ def gscontrol_raw(
         echo_nogs = data_echo_masked - np.dot(glbase[:, :1], betas[:1, :]).T + echo_mean
         data_cat_nogs[:, echo, :] = utils.unmask(echo_nogs, temporal_mean_mask)
 
+    # Calculate dependence metrics
+    kappa, rho = calculate_gsr_metrics(
+        gs_ts=gs_ts,
+        data_optcom=data_optcom,
+        data_cat=data_cat,
+        adaptive_mask=adaptive_mask,
+        tes=tes,
+        n_independent_echos=n_independent_echos,
+    )
+
+    # Write out the global signal time series
+    glsig_df = pd.DataFrame(data=gs_ts.T, columns=["global_signal"])
+    io_generator.add_df_to_file(glsig_df, "confounds tsv")
+    metadata = {
+        "global_signal": {
+            "LongName": "GSR Global Signal Timeseries",
+            "Description": (
+                "Global signal time series, estimated using the amplitude-based T1 "
+                "equilibration correction method. "
+                "This involves taking the spatial minimum of the optimally combined "
+                "data after detrending with a Legendre polynomial basis set of "
+                f"order = 0 and degree = {dtrank}. "
+                "The global signal time series is then estimated by regressing the "
+                "spatial global signal against the optimally combined data. "
+                "The time series is z-scored prior to saving."
+            ),
+            "Kappa": kappa,
+            "Rho": rho,
+            "VarianceExplained": varexpl,
+        }
+    }
+    io_generator.add_dict_to_file(metadata, "confounds json")
+
     return data_cat_nogs, data_optcom_nogs
 
 
@@ -154,6 +198,10 @@ def minimum_image_regression(
     component_table: pd.DataFrame,
     classification_tags: list,
     io_generator: io.OutputGenerator,
+    data_cat: np.ndarray,
+    adaptive_mask: np.ndarray,
+    tes: np.ndarray,
+    n_independent_echos: int,
 ):
     """Perform minimum image regression (MIR) to remove T1-like effects from BOLD-like components.
 
@@ -177,6 +225,19 @@ def minimum_image_regression(
         This is used to separate "accepted" and "ignored" components.
     io_generator : :obj:`tedana.io.OutputGenerator`
         The output generating object for this workflow
+    data_cat : (S x E x T) array_like
+        Echo-wise functional data data.
+        Used to calculate dependence metrics.
+    adaptive_mask : (M,) array_like
+        Adaptive mask, where each voxel's value is the number of echoes with
+        "good signal". Limited to masked voxels.
+        Used to calculate dependence metrics.
+    tes : (E,) array_like
+        Echo times.
+        Used to calculate dependence metrics.
+    n_independent_echos : int
+        Number of independent echos.
+        Used to calculate dependence metrics.
 
     Notes
     -----
@@ -260,8 +321,6 @@ def minimum_image_regression(
 
     # Find the global signal based on the T1-like effect
     gs_ts = np.linalg.lstsq(t1_map, data_optcom_z, rcond=None)[0]
-    glsig_df = pd.DataFrame(data=gs_ts.T, columns=["mir_global_signal"])
-    io_generator.add_df_to_file(glsig_df, "confounds tsv")
 
     # Calculate the T1-like global signal
     t1_gs_data = np.dot(np.linalg.lstsq(gs_ts.T, mehk_ts.T, rcond=None)[0].T, gs_ts)
@@ -297,3 +356,70 @@ def minimum_image_regression(
             utils.unmask(comp_pes_norm[:, 2:], mask),
             "ICA accepted mir component weights img",
         )
+
+    # Write out the global signal time series
+    glsig_df = pd.DataFrame(data=gs_ts.T, columns=["mir_global_signal"])
+    io_generator.add_df_to_file(glsig_df, "confounds tsv")
+
+    # Calculate dependence metrics
+    kappa, rho = calculate_gsr_metrics(
+        gs_ts=gs_ts,
+        data_optcom=data_optcom,
+        data_cat=data_cat,
+        adaptive_mask=adaptive_mask,
+        tes=tes,
+        n_independent_echos=n_independent_echos,
+    )
+
+    metadata = {
+        "mir_global_signal": {
+            "LongName": "MIR Global Signal Timeseries",
+            "Description": (
+                "Global signal time series, estimated using the minimum image regression method. "
+                "This involves taking the voxel-wise minimum over time of the BOLD-like "
+                "components after regressing out the T1-like global signal. "
+                "The global signal time series is then estimated by regressing the "
+                "T1-like effect against the optimally combined data. "
+                "The time series is z-scored prior to saving."
+            ),
+            "Kappa": kappa,
+            "Rho": rho,
+            "VarianceExplained": varexpl,
+        }
+    }
+    io_generator.add_dict_to_file(metadata, "confounds json")
+
+
+def calculate_gsr_metrics(
+    *,
+    gs_ts: np.ndarray,
+    data_optcom: np.ndarray,
+    data_cat: np.ndarray,
+    adaptive_mask: np.ndarray,
+    tes: np.ndarray,
+    n_independent_echos: int,
+):
+    """Calculate dependence metrics from GSR."""
+    from tedana.metrics.dependence import (
+        calculate_weights,
+        calculate_z_maps,
+        calculate_f_maps,
+        calculate_dependence_metrics,
+    )
+
+    weights = calculate_weights(data_optcom=data_optcom, mixing=gs_ts[:, np.newaxis])
+    z_maps = calculate_z_maps(weights=weights)
+    f_t2_maps, f_s0_maps, _, _ = calculate_f_maps(
+        data_cat=data_cat,
+        z_maps=z_maps,
+        mixing=gs_ts[:, np.newaxis],
+        adaptive_mask=adaptive_mask,
+        tes=tes,
+        n_independent_echos=n_independent_echos,
+    )
+    kappa, rho = calculate_dependence_metrics(
+        f_t2_maps=f_t2_maps,
+        f_s0_maps=f_s0_maps,
+        z_maps=z_maps,
+    )
+    return kappa[0], rho[0]
