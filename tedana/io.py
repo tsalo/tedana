@@ -380,6 +380,29 @@ class OutputGenerator:
 
         return name
 
+    def add_dict_to_json(self, data, description, **kwargs):
+        """Add a dictionary to a json file, which may or may not exist.
+
+        Parameters
+        ----------
+        data : dict
+            Data to save to file.
+        description : str
+            Description of the data, used to determine the appropriate filename from
+            ``self.config``.
+
+        Returns
+        -------
+        name : str
+            The full file path of the saved file.
+        """
+        name = self.get_name(description, **kwargs)
+        if op.isfile(name):
+            old_data = load_json(name)
+            data = {**old_data, **data}
+
+        self.save_json(data, name)
+
     def save_self(self):
         """Save the registry to a json file.
 
