@@ -19,9 +19,9 @@ def gscontrol_raw(
     n_echos: int,
     io_generator: io.OutputGenerator,
     dtrank: int = 4,
-    adaptive_mask: np.ndarray,
-    tes: np.ndarray,
-    n_independent_echos: int,
+    adaptive_mask: np.ndarray = None,
+    tes: np.ndarray = None,
+    n_independent_echos: int = None,
 ):
     """Remove global signal from individual echo ``data_cat`` and ``data_optcom`` time series.
 
@@ -154,15 +154,17 @@ def gscontrol_raw(
         echo_nogs = data_echo_masked - np.dot(glbase[:, :1], betas[:1, :]).T + echo_mean
         data_cat_nogs[:, echo, :] = utils.unmask(echo_nogs, temporal_mean_mask)
 
-    # Calculate dependence metrics
-    kappa, rho = calculate_gsr_metrics(
-        gs_ts=gs_ts,
-        data_optcom=data_optcom,
-        data_cat=data_cat,
-        adaptive_mask=adaptive_mask,
-        tes=tes,
-        n_independent_echos=n_independent_echos,
-    )
+    kappa, rho = None, None
+    if adaptive_mask is not None:
+        # Calculate dependence metrics
+        kappa, rho = calculate_gsr_metrics(
+            gs_ts=gs_ts,
+            data_optcom=data_optcom,
+            data_cat=data_cat,
+            adaptive_mask=adaptive_mask,
+            tes=tes,
+            n_independent_echos=n_independent_echos,
+        )
 
     # Write out the global signal time series
     glsig_df = pd.DataFrame(data=gs_ts.T, columns=["global_signal"])
@@ -198,10 +200,10 @@ def minimum_image_regression(
     component_table: pd.DataFrame,
     classification_tags: list,
     io_generator: io.OutputGenerator,
-    data_cat: np.ndarray,
-    adaptive_mask: np.ndarray,
-    tes: np.ndarray,
-    n_independent_echos: int,
+    data_cat: np.ndarray = None,
+    adaptive_mask: np.ndarray = None,
+    tes: np.ndarray = None,
+    n_independent_echos: int = None,
 ):
     """Perform minimum image regression (MIR) to remove T1-like effects from BOLD-like components.
 
@@ -361,15 +363,17 @@ def minimum_image_regression(
     glsig_df = pd.DataFrame(data=gs_ts.T, columns=["mir_global_signal"])
     io_generator.add_df_to_file(glsig_df, "confounds tsv")
 
-    # Calculate dependence metrics
-    kappa, rho = calculate_gsr_metrics(
-        gs_ts=gs_ts,
-        data_optcom=data_optcom,
-        data_cat=data_cat,
-        adaptive_mask=adaptive_mask,
-        tes=tes,
-        n_independent_echos=n_independent_echos,
-    )
+    kappa, rho = None, None
+    if data_cat is not None:
+        # Calculate dependence metrics
+        kappa, rho = calculate_gsr_metrics(
+            gs_ts=gs_ts,
+            data_optcom=data_optcom,
+            data_cat=data_cat,
+            adaptive_mask=adaptive_mask,
+            tes=tes,
+            n_independent_echos=n_independent_echos,
+        )
 
     metadata = {
         "mir_global_signal": {

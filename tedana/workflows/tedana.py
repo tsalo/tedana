@@ -801,6 +801,9 @@ def tedana_workflow(
             data_optcom=data_optcom,
             n_echos=n_echos,
             io_generator=io_generator,
+            adaptive_mask=masksum_denoise,
+            tes=tes,
+            n_independent_echos=n_independent_echos,
         )
 
     fout = io_generator.save_file(data_optcom, "combined img")
@@ -1030,6 +1033,10 @@ def tedana_workflow(
             component_table=component_table,
             classification_tags=selector.classification_tags,
             io_generator=io_generator,
+            data_cat=data_cat,
+            adaptive_mask=masksum_denoise,
+            tes=tes,
+            n_independent_echos=n_independent_echos,
         )
 
     if verbose:
