@@ -3,6 +3,9 @@
 import argparse
 import sys
 
+import nibabel as nb
+from nilearn import masking
+
 from tedana.workflows.parser_utils import is_valid_file
 
 
@@ -94,11 +97,31 @@ def denoise_workflow(
     denoising_method,
     dummy_scans,
 ):
-    """Denoise data using ICA components and classifications."""
+    """Denoise data using ICA components and classifications.
+
+    Parameters
+    ----------
+    in_file : str
+        Path to the input file to denoise.
+    out_dir : str
+        Path to the output directory.
+    prefix : str
+        Prefix for the output files.
+    mix : str
+        Path to the mixing matrix file.
+    comp : str
+        Path to the component table file.
+    mask : str or None
+        Path to the mask file.
+    denoising_method : list of str
+        List of denoising methods to use.
+    dummy_scans : int
+        Number of dummy scans to remove from the beginning of the data.
+    """
     import os
 
+    import numpy as np
     import pandas as pd
-    from nilearn.maskers import NiftiMasker
 
     # Load the mixing matrix
     mixing_df = pd.read_table(mix)  # Shape is time-by-components
@@ -117,37 +140,43 @@ def denoise_workflow(
     elif not prefix.endswith("_"):
         prefix = f"{prefix}_"
 
+    if in_file.endswith((".nii", ".nii.gz")):
+        out_ext = "nii.gz"
+        img = nb.load(in_file)
+        if mask is None:
+            # Create a mask of all voxels
+            mask = nb.Nifti1Image(
+                np.ones(img.shape[:3]),
+                img.affine,
+                img.header,
+            )
+
+        data = masking.apply_mask(img, mask)
+    else:
+        out_ext = ".".join(in_file.split(".")[-2:])
+        data = nb.load(in_file).get_fdata()
+
     if "aggr" in denoising_method:
-        masker = NiftiMasker(
-            mask_img=mask,
-            standardize_confounds=True,
-            standardize=False,
-            smoothing_fwhm=None,
-            detrend=False,
-            low_pass=None,
-            high_pass=None,
-            t_r=None,  # This shouldn't be necessary since we aren't bandpass filtering
-            reports=False,
+        # Fit GLM to rejected components and intercept
+        regressors = np.hstack(
+            (
+                rejected_components,
+                np.ones((mixing_df.shape[0], 1)),
+            ),
         )
+        betas = np.linalg.lstsq(regressors, data, rcond=None)[0][:-1]
 
-        # Denoise the data by fitting and transforming the data file using the masker
-        denoised_img_2d = masker.fit_transform(in_file, confounds=rejected_components)
-
-        # Transform denoised data back into 4D space
-        denoised_img_4d = masker.inverse_transform(denoised_img_2d)
+        # Denoise the data using the betas from just the bad components
+        confounds_idx = np.arange(rejected_components.shape[1])
+        pred_data = np.dot(rejected_components, betas[confounds_idx, :])
+        data_denoised = data - pred_data
 
         # Save to file
-        denoised_img_4d.to_filename(os.path.join(out_dir, f"{prefix}desc-aggr_bold.nii.gz"))
+        denoised_img = _to_niimg(data_denoised, img.affine, img.header, out_ext, mask)
+        denoised_img.to_filename(os.path.join(out_dir, f"{prefix}desc-aggr_bold.{out_ext}"))
 
     if "nonaggr" in denoising_method:
-        import numpy as np
-        from nilearn.masking import apply_mask, unmask  # Functions for (un)masking fMRI data
-
-        # Apply the mask to the data image to get a 2d array
-        data = apply_mask(in_file, mask)
-
-        # Fit GLM to accepted components, rejected components and nuisance regressors
-        # (after adding a constant term)
+        # Fit GLM to accepted components, rejected components and intercept
         regressors = np.hstack(
             (
                 rejected_components,
@@ -163,8 +192,8 @@ def denoise_workflow(
         data_denoised = data - pred_data
 
         # Save to file
-        denoised_img = unmask(data_denoised, mask)
-        denoised_img.to_filename(os.path.join(out_dir, f"{prefix}desc-nonaggr_bold.nii.gz"))
+        denoised_img = _to_niimg(data_denoised, img.affine, img.header, out_ext, mask)
+        denoised_img.to_filename(os.path.join(out_dir, f"{prefix}desc-nonaggr_bold{out_ext}"))
 
     if "orthaggr" in denoising_method:
         # Regress the good components out of the bad time series to get "pure evil" regressors
@@ -172,27 +201,32 @@ def denoise_workflow(
         pred_bad_timeseries = np.dot(accepted_components, betas)
         orth_bad_timeseries = rejected_components - pred_bad_timeseries
 
-        # Once you have these "pure evil" components, you can denoise the data
-        masker = NiftiMasker(
-            mask_img=mask,
-            standardize_confounds=True,
-            standardize=False,
-            smoothing_fwhm=None,
-            detrend=False,
-            low_pass=None,
-            high_pass=None,
-            t_r=None,  # This shouldn't be necessary since we aren't bandpass filtering
-            reports=False,
+        # Fit GLM to rejected components and intercept
+        regressors = np.hstack(
+            (
+                orth_bad_timeseries,
+                np.ones((mixing_df.shape[0], 1)),
+            ),
         )
+        betas = np.linalg.lstsq(regressors, data, rcond=None)[0][:-1]
 
-        # Denoise the data by fitting and transforming the data file using the masker
-        denoised_img_2d = masker.fit_transform(in_file, confounds=orth_bad_timeseries)
-
-        # Transform denoised data back into 4D space
-        denoised_img_4d = masker.inverse_transform(denoised_img_2d)
+        # Denoise the data using the betas from just the bad components
+        confounds_idx = np.arange(rejected_components.shape[1])
+        pred_data = np.dot(rejected_components, betas[confounds_idx, :])
+        data_denoised = data - pred_data
 
         # Save to file
-        denoised_img_4d.to_filename(os.path.join(out_dir, f"{prefix}desc-orthaggr_bold.nii.gz"))
+        denoised_img = _to_niimg(data_denoised, img.affine, img.header, out_ext, mask)
+        denoised_img.to_filename(os.path.join(out_dir, f"{prefix}desc-orthaggr_bold.{out_ext}"))
+
+
+def _to_niimg(data, affine, header, out_ext, mask):
+    if out_ext == "nii.gz":
+        img = masking.unmask(data, mask)
+    else:
+        img = nb.Cifti2Image(data, header)
+
+    return img
 
 
 def _main(argv=None):
