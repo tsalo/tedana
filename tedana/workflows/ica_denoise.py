@@ -1,9 +1,12 @@
 """A command-line interface to denoise data using ICA components and classifications."""
 
 import argparse
+import os
 import sys
 
 import nibabel as nb
+import numpy as np
+import pandas as pd
 from nilearn import masking
 
 from tedana.workflows.parser_utils import is_valid_file
@@ -118,11 +121,6 @@ def denoise_workflow(
     dummy_scans : int
         Number of dummy scans to remove from the beginning of the data.
     """
-    import os
-
-    import numpy as np
-    import pandas as pd
-
     # Load the mixing matrix
     mixing_df = pd.read_table(mix)  # Shape is time-by-components
 
@@ -156,14 +154,12 @@ def denoise_workflow(
         out_ext = ".".join(in_file.split(".")[-2:])
         data = nb.load(in_file).get_fdata()
 
+    if dummy_scans > 0:
+        data = data[dummy_scans:, :]
+
     if "aggr" in denoising_method:
         # Fit GLM to rejected components and intercept
-        regressors = np.hstack(
-            (
-                rejected_components,
-                np.ones((mixing_df.shape[0], 1)),
-            ),
-        )
+        regressors = np.hstack((rejected_components, np.ones((mixing_df.shape[0], 1))))
         betas = np.linalg.lstsq(regressors, data, rcond=None)[0][:-1]
 
         # Denoise the data using the betas from just the bad components
@@ -202,12 +198,7 @@ def denoise_workflow(
         orth_bad_timeseries = rejected_components - pred_bad_timeseries
 
         # Fit GLM to rejected components and intercept
-        regressors = np.hstack(
-            (
-                orth_bad_timeseries,
-                np.ones((mixing_df.shape[0], 1)),
-            ),
-        )
+        regressors = np.hstack((orth_bad_timeseries, np.ones((mixing_df.shape[0], 1))))
         betas = np.linalg.lstsq(regressors, data, rcond=None)[0][:-1]
 
         # Denoise the data using the betas from just the bad components
@@ -224,7 +215,13 @@ def _to_niimg(data, affine, header, out_ext, mask):
     if out_ext == "nii.gz":
         img = masking.unmask(data, mask)
     else:
-        img = nb.Cifti2Image(data, header)
+        # Dense scalar files have (ScalarAxis, BrainModelAxis)
+        n_volumes = data.shape[0]
+        scalar_names = [f'#{i + 1}' for i in range(n_volumes)]
+        ax_0 = nb.cifti2.cifti2_axes.ScalarAxis(name=scalar_names)
+        ax_1 = header.get_axis(1)
+        new_header = nb.Cifti2Header.from_axes((ax_0, ax_1))
+        img = nb.Cifti2Image(data, new_header)
 
     return img
 
