@@ -74,7 +74,7 @@ def test_reshape_niimg():
     assert utils.reshape_niimg(fimg.get_fdata()).shape == exp_shape
 
 
-def test_make_adaptive_mask():
+def test_make_adaptive_mask(caplog):
     """Test tedana.utils.make_adaptive_mask with different methods."""
     # load data make masks
     mask_file = pjoin(datadir, "mask.nii.gz")
@@ -102,6 +102,16 @@ def test_make_adaptive_mask():
     # Decay: good good good (3)
     data[idx + 5, :, :] = np.array([1, 0.9, -1])[:, None]
 
+    # Simulating 5 echo data to test the n_independent_echos parameter
+    data5 = np.concatenate(
+        (
+            data,
+            0.95 * np.expand_dims(data[:, 2, :], axis=1),
+            0.9 * np.expand_dims(data[:, 2, :], axis=1),
+        ),
+        axis=1,
+    )
+
     # Just dropout method
     mask, adaptive_mask = utils.make_adaptive_mask(
         data,
@@ -122,6 +132,7 @@ def test_make_adaptive_mask():
     vals, counts = np.unique(adaptive_mask, return_counts=True)
     assert np.allclose(vals, np.array([0, 1, 2, 3]))
     assert np.allclose(counts, np.array([14976, 1817, 4427, 43130]))
+    assert "voxels in user-defined mask do not have good signal" in caplog.text
 
     # Just decay method
     mask, adaptive_mask = utils.make_adaptive_mask(
@@ -206,6 +217,43 @@ def test_make_adaptive_mask():
     vals, counts = np.unique(adaptive_mask, return_counts=True)
     assert np.allclose(vals, np.array([0, 1, 2, 3]))
     assert np.allclose(counts, np.array([3365, 1412, 1195, 58378]))
+    assert "No methods provided for adaptive mask generation." in caplog.text
+
+    # testing n_independent_echos
+    # This should match "decay" from above, except all voxels with 3 good echoes should now have 5
+    # since two echoes were added that should not have caused more decay
+    mask, adaptive_mask = utils.make_adaptive_mask(
+        data5, mask=mask_file, threshold=1, methods=["decay"], n_independent_echos=3
+    )
+
+    assert mask.shape == adaptive_mask.shape == (64350,)
+    assert np.allclose(mask, (adaptive_mask >= 1).astype(bool))
+    assert adaptive_mask[idx] == 5
+    assert adaptive_mask[idx + 1] == 2
+    assert adaptive_mask[idx + 2] == 2
+    assert adaptive_mask[idx + 3] == 1
+    assert adaptive_mask[idx + 4] == 5
+    assert adaptive_mask[idx + 5] == 2
+    assert mask.sum() == 60985  # This method can't flag first echo as bad
+    vals, counts = np.unique(adaptive_mask, return_counts=True)
+    assert np.allclose(vals, np.array([0, 1, 2, 5]))
+    assert np.allclose(counts, np.array([3365, 4366, 5973, 50646]))
+    # 4366 + 5973 = 10399 (i.e. voxels with 1 or 2 good echoes are flagged here)
+    assert (
+        "10339 voxels (17.0%) have fewer than 3.0 good voxels. "
+        "These voxels will be used in all analyses, "
+        "but might not include 3 independent echo measurements."
+    ) in caplog.text
+
+    mask, adaptive_mask = utils.make_adaptive_mask(
+        data5, mask=mask_file, threshold=1, methods=["decay"], n_independent_echos=4
+    )
+
+    assert (
+        "10339 voxels (17.0%) have fewer than 3.0 good voxels. "
+        "The degrees of freedom for fits across echoes will remain 4 even if "
+        "there might be fewer independent echo measurements."
+    ) in caplog.text
 
 
 # SMOKE TESTS
@@ -323,6 +371,34 @@ def test_smoke_threshold_map():
     assert utils.threshold_map(img, min_cluster_size, sided="bi") is not None
 
 
+def test_create_legendre_polynomial_basis_set():
+    """Checking that accurate Legendre polynomials are created."""
+
+    n_vols = 100
+    legendre_arr = utils.create_legendre_polynomial_basis_set(n_vols, dtrank=6)
+
+    # Testing first 6 orders to 6 decimal accuracy using
+    #  explicit equations rathern than scipy's lpmv
+    legendre_rounded = np.round(legendre_arr, decimals=6)
+    bounds = np.linspace(-1, 1, n_vols)
+    # order 0 (all 1's)
+    assert (legendre_arr[:, 0] == 1).sum() == n_vols
+    # order 1 (y=x)
+    assert np.abs((legendre_rounded[:, 1] - np.round(bounds, decimals=6))).sum() == 0
+    # order 2 (y = 0.5*(3*x^2 - 1))
+    tmp_o2 = 0.5 * (3 * bounds**2 - 1)
+    assert np.abs((legendre_rounded[:, 2] - np.round(tmp_o2, decimals=6))).sum() == 0
+    # order 3 (y = 0.5*(5*x^3 - 3*x))
+    tmp_o3 = 0.5 * (5 * bounds**3 - 3 * bounds)
+    assert np.abs((legendre_rounded[:, 3] - np.round(tmp_o3, decimals=6))).sum() == 0
+    # order 4 (y = 0.125*(35*x^4 - 30*x^2 + 3))
+    tmp_o4 = 0.125 * (35 * bounds**4 - 30 * bounds**2 + 3)
+    assert np.abs((legendre_rounded[:, 4] - np.round(tmp_o4, decimals=6))).sum() == 0
+    # order 5 (y = 0.125*(63*x^5 - 70*x^3 + 15x))
+    tmp_o5 = 0.125 * (63 * bounds**5 - 70 * bounds**3 + 15 * bounds)
+    assert np.abs((legendre_rounded[:, 5] - np.round(tmp_o5, decimals=6))).sum() == 0
+
+
 def test_sec2millisec():
     """Ensure that sec2millisec returns 1000x the input values."""
     assert utils.sec2millisec(5) == 5000
@@ -335,4 +411,142 @@ def test_millisec2sec():
     assert utils.millisec2sec(np.array([5000])) == np.array([5])
 
 
-# TODO: "BREAK" AND UNIT TESTS
+def test_check_te_values(caplog):
+    """Ensure that check_te_values returns the correct values."""
+    # Values in seconds (preferred per BIDS) - should be converted to milliseconds
+    assert utils.check_te_values([0.015, 0.039, 0.063]) == [15, 39, 63]
+    assert utils.check_te_values([0.15, 0.35, 0.55]) == [150, 350, 550]
+
+    # EPTI echo times (48 echoes)
+    epti_te_ms = [
+        6.70,
+        7.63,
+        8.56,
+        9.49,
+        10.42,
+        11.35,
+        12.28,
+        13.21,
+        14.14,
+        15.07,
+        16.00,
+        16.93,
+        17.86,
+        18.79,
+        19.72,
+        20.65,
+        21.58,
+        22.51,
+        23.44,
+        24.37,
+        25.30,
+        26.23,
+        27.16,
+        28.09,
+        29.02,
+        29.95,
+        30.88,
+        31.81,
+        32.74,
+        33.67,
+        34.60,
+        35.53,
+        36.46,
+        37.39,
+        38.32,
+        39.25,
+        40.18,
+        41.11,
+        42.04,
+        42.97,
+        43.90,
+        44.83,
+        45.76,
+        46.69,
+        47.62,
+        48.55,
+        49.48,
+        50.41,
+    ]
+    epti_te_sec = [te / 1000 for te in epti_te_ms]
+    assert utils.check_te_values(epti_te_sec) == epti_te_ms
+
+    # Values in milliseconds (deprecated) - should be returned as-is with warning
+    assert utils.check_te_values([15, 39, 63]) == [15, 39, 63]
+    assert (
+        "TE values appear to be in milliseconds. Per BIDS convention, echo times should "
+        "be provided in seconds. Support for millisecond TE values is deprecated and will "
+        "be removed in a future version. Please provide TE values in seconds."
+    ) in caplog.text
+    assert utils.check_te_values([2, 3, 4]) == [2, 3, 4]
+
+    # EPTI echo times in milliseconds (deprecated)
+    assert utils.check_te_values(epti_te_ms) == epti_te_ms
+
+    # Check that the error is raised when TE values are in mixed units
+    with pytest.raises(ValueError):
+        utils.check_te_values([0.5, 2, 3])
+
+
+def test_check_t2s_values(caplog):
+    """Ensure that check_t2s_values returns the correct values."""
+    # Values in seconds (expected per BIDS) - should be converted to milliseconds
+    t2s_sec = np.array([0.015, 0.025, 0.035, 0.045])
+    result = utils.check_t2s_values(t2s_sec)
+    np.testing.assert_array_equal(result, [15, 25, 35, 45])
+
+    # Values in milliseconds (common mistake) - should be returned as-is with warning
+    t2s_ms = np.array([15, 25, 35, 45])
+    result = utils.check_t2s_values(t2s_ms)
+    np.testing.assert_array_equal(result, [15, 25, 35, 45])
+    assert (
+        "T2* map median value is 30.00, which suggests values are in "
+        "milliseconds rather than seconds. Per BIDS convention, T2* maps should be "
+        "in seconds. The map will be used as-is (in milliseconds), but please consider "
+        "providing T2* maps in seconds in the future for consistency with BIDS."
+    ) in caplog.text
+
+    # Array with zeros (common in T2* maps for masked voxels)
+    t2s_with_zeros = np.array([0, 0.020, 0.030, 0, 0.040])
+    result = utils.check_t2s_values(t2s_with_zeros)
+    np.testing.assert_array_equal(result, [0, 20, 30, 0, 40])
+
+    # All zeros - should return as-is with warning
+    t2s_all_zeros = np.array([0, 0, 0, 0])
+    result = utils.check_t2s_values(t2s_all_zeros)
+    np.testing.assert_array_equal(result, [0, 0, 0, 0])
+
+    # Values that are too large - should raise ValueError
+    t2s_invalid = np.array([1500, 2500, 3500])
+    with pytest.raises(ValueError):
+        utils.check_t2s_values(t2s_invalid)
+
+
+def test_parse_volume_indices():
+    """Ensure that parse_volume_indices returns the correct values."""
+    assert utils.parse_volume_indices("0,1,2") == [0, 1, 2]
+    assert utils.parse_volume_indices("0:3") == [0, 1, 2]
+    assert utils.parse_volume_indices("0:3,5,6,10:12") == [0, 1, 2, 5, 6, 10, 11]
+
+    # Check that errors are raised for invalid inputs
+    # Step size is not supported
+    with pytest.raises(ValueError, match="Invalid volume indices string"):
+        utils.parse_volume_indices("0:10:2")
+
+    with pytest.raises(ValueError, match="Invalid volume indices string"):
+        utils.parse_volume_indices("::2")
+
+    # Open-ended range is not supported
+    with pytest.raises(ValueError, match="Invalid volume indices string"):
+        utils.parse_volume_indices(":5")
+
+    with pytest.raises(ValueError, match="Invalid volume indices string"):
+        utils.parse_volume_indices("5:")
+
+    # Negative indices are not supported (in a range)
+    with pytest.raises(ValueError, match="Invalid volume indices string"):
+        utils.parse_volume_indices("0:-5")
+
+    # Negative indices are not supported (at all)
+    with pytest.raises(ValueError, match="Invalid volume indices string"):
+        utils.parse_volume_indices("-1")

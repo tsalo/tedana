@@ -3,7 +3,7 @@
 import logging
 
 import numpy as np
-from scipy import stats
+from scipy import linalg, stats
 
 from tedana import utils
 
@@ -11,14 +11,16 @@ LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
 
 
-def getfbounds(n_echos):
+def getfbounds(n_independent_sources):
     """
     Get F-statistic boundaries based on number of echos.
 
     Parameters
     ----------
-    n_echos : :obj:`int`
-        Number of echoes
+    n_independent_sources : :obj:`int`
+        The number of independent sources to calculate DOF for goodness of fit metrics (fstat).
+        Typically the number of echos in the multi-echo data
+        May be a lower value for EPTI acquisitions.
 
     Returns
     -------
@@ -26,77 +28,44 @@ def getfbounds(n_echos):
         F-statistic thresholds for alphas of 0.05, 0.025, and 0.01,
         respectively.
     """
-    f05 = stats.f.ppf(q=(1 - 0.05), dfn=1, dfd=(n_echos - 1))
-    f025 = stats.f.ppf(q=(1 - 0.025), dfn=1, dfd=(n_echos - 1))
-    f01 = stats.f.ppf(q=(1 - 0.01), dfn=1, dfd=(n_echos - 1))
+    f05 = stats.f.ppf(q=(1 - 0.05), dfn=1, dfd=(n_independent_sources - 1))
+    f025 = stats.f.ppf(q=(1 - 0.025), dfn=1, dfd=(n_independent_sources - 1))
+    f01 = stats.f.ppf(q=(1 - 0.01), dfn=1, dfd=(n_independent_sources - 1))
     return f05, f025, f01
 
 
-def computefeats2(data, mmix, mask=None, normalize=True):
-    """
-    Convert `data` to component space using `mmix`.
+def voxelwise_univariate_zstats(data, mixing):
+    """Compute univariate voxelwise z-statistics using correlations.
 
     Parameters
     ----------
-    data : (S x T) array_like
-        Input data
-    mmix : (T [x C]) array_like
-        Mixing matrix for converting input data to component space, where `C`
-        is components and `T` is the same as in `data`
-    mask : (S,) array_like or None, optional
-        Boolean mask array. Default: None
-    normalize : bool, optional
-        Whether to z-score output. Default: True
+    mixing : array, shape (n_vols, n_components)
+        Independent variables (time x components)
+    data : array, shape (n_voxels, n_vols)
+        Dependent variables (voxels x time)
 
     Returns
     -------
-    data_z : (S x C) :obj:`numpy.ndarray`
-        Data in component space
+    zstat : array, shape (n_voxels, n_components)
+        Z-statistics for each voxel/component
     """
-    if data.ndim != 2:
-        raise ValueError(f"Parameter data should be 2d, not {data.ndim}d")
-    elif mmix.ndim not in [2]:
-        raise ValueError(f"Parameter mmix should be 2d, not {mmix.ndim}d")
-    elif (mask is not None) and (mask.ndim != 1):
-        raise ValueError(f"Parameter mask should be 1d, not {mask.ndim}d")
-    elif (mask is not None) and (data.shape[0] != mask.shape[0]):
-        raise ValueError(
-            f"First dimensions (number of samples) of data ({data.shape[0]}) "
-            f"and mask ({mask.shape[0]}) do not match."
-        )
-    elif data.shape[1] != mmix.shape[0]:
-        raise ValueError(
-            f"Second dimensions (number of volumes) of data ({data.shape[0]}) "
-            f"and mmix ({mmix.shape[0]}) do not match."
-        )
+    n_vols_mixing, _ = mixing.shape
+    _, n_vols_data = data.shape
+    if n_vols_mixing != n_vols_data:
+        raise ValueError("Time dimension mismatch between mixing and data")
 
-    # demean masked data
-    if mask is not None:
-        data = data[mask, ...]
-    # normalize data (subtract mean and divide by standard deviation) in the last dimension
-    # so that least-squares estimates represent "approximate" correlation values (data_r)
-    # assuming mixing matrix (mmix) values are also normalized
-    data_vn = stats.zscore(data, axis=-1)
+    # Z-score over time
+    mixing = stats.zscore(mixing, axis=0)
+    data = stats.zscore(data, axis=1)
 
-    # get betas of `data`~`mmix` and limit to range [-0.999, 0.999]
-    data_r = get_coeffs(data_vn, mmix, mask=None)
-    # Avoid abs(data_r) => 1, otherwise Fisher's transform will return Inf or -Inf
-    data_r[data_r < -0.999] = -0.999
-    data_r[data_r > 0.999] = 0.999
+    # Pearson correlations (voxel x component)
+    r = (data @ mixing) / n_vols_data
 
-    # R-to-Z transform
-    data_z = np.arctanh(data_r)
-    if data_z.ndim == 1:
-        data_z = np.atleast_2d(data_z).T
+    # Convert correlation to z-statistic
+    tstat = r * np.sqrt((n_vols_data - 2) / (1.0 - r**2))
+    zstat = t_to_z(t_values=tstat, dof=n_vols_data - 2)
 
-    # normalize data (only division by std)
-    if normalize:
-        # subtract mean and dividing by standard deviation
-        data_zm = stats.zscore(data_z, axis=0)
-        # adding back the mean
-        data_z = data_zm + (data_z.mean(axis=0, keepdims=True) / data_z.std(axis=0, keepdims=True))
-
-    return data_z
+    return zstat
 
 
 def get_coeffs(data, x, mask=None, add_const=False):
@@ -223,3 +192,46 @@ def t_to_z(t_values, dof):
     if ret_float:
         out = out[0]
     return out
+
+
+def fit_model(x, y, output_residual=False):
+    """
+    Linear regression for a model y = betas * x + error.
+
+    Parameters
+    ----------
+    x : (T X R) :obj:`numpy.ndarray`
+        2D array with the regressors for the specified model an time
+    y : (T X C) :obj:`numpy.ndarray`
+        Time by mixing matrix components for the time series for fitting
+    output_residual : :obj:`bool`
+        If true, then this just outputs the residual of the fit.
+        If false, then outputs beta fits, sse, and df
+
+    Returns
+    -------
+    residual : (T X C) :obj:`numpy.ndarray`
+        The residual time series for the fit (only if output_residual is True)
+    betas : (R X C) :obj:`numpy.ndarray`
+        The magnitude fits for the model (only if output_residual is False)
+    sse : (C) :obj:`numpy.ndarray`
+        The sum of square error for the model (only if output_residual is False)
+    df : :obj:`int`
+        The degrees of freeom for the model (only if output_residual is False)
+        (timepoints - number of regressors)
+    """
+    betas, _, _, _ = linalg.lstsq(x, y)
+    # matrix-multiplication on the regressors with the betas -> to create a new 'estimated'
+    # component matrix  = fitted regressors (least squares beta solution * regressors)
+    fitted_regressors = np.matmul(x, betas)
+    residual = y - fitted_regressors
+    if output_residual:
+        return residual
+    else:
+        # sum the differences between the actual ICA components and the 'estimated'
+        # component matrix (beta-fitted regressors)
+        sse = np.sum(np.square(residual), axis=0)
+        # calculate how many individual values [timepoints] are free to vary after
+        # the least-squares solution [beta] betw X & Y is calculated
+        df = y.shape[0] - betas.shape[0]
+        return betas, sse, df

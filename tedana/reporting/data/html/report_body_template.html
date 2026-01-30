@@ -39,9 +39,6 @@
 
   .carpet-plots {
     float: left;
-  }
-
-  .carpet-plots {
     margin-left: 5%;
     margin-right: 5%;
     margin-bottom: 100px;
@@ -62,6 +59,13 @@
     margin-bottom: 150px;
     height: auto;
     float: left;
+  }
+
+  .tsne-plots {
+    float: left;
+    margin-left: 5%;
+    margin-right: 5%;
+    margin-bottom: 100px;
   }
 
   button {
@@ -166,61 +170,340 @@
     padding: 2em !important;
     border-radius: 5px;
   }
+
+  /* Rica button styles */
+  .rica-button-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+  }
+
+  .rica-button {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 8px;
+    color: white;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    transition: transform 0.2s, box-shadow 0.2s;
+    float: none;
+    height: auto;
+  }
+
+  .rica-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+    opacity: 1;
+  }
+
+  .rica-button:active {
+    transform: translateY(0);
+    float: none;
+    margin-top: 0;
+  }
+
+  /* Rica modal styles */
+  .rica-modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .rica-modal {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    position: relative;
+  }
+
+  .rica-modal h2 {
+    margin: 0 0 15px 0;
+    color: #333;
+    font-size: 24px;
+  }
+
+  .rica-modal p {
+    color: #555;
+    line-height: 1.6;
+    margin-bottom: 15px;
+  }
+
+  .rica-modal code {
+    background: #f4f4f4;
+    padding: 10px 15px;
+    border-radius: 6px;
+    display: block;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    color: #333;
+    margin: 15px 0;
+  }
+
+  .rica-modal-close {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #999;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    float: none;
+  }
+
+  .rica-modal-close:hover {
+    color: #333;
+    opacity: 1;
+  }
+
+  .rica-modal-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  .rica-modal-btn {
+    flex: 1;
+    padding: 12px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    float: none;
+    height: auto;
+  }
+
+  .rica-modal-btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+  }
+
+  .rica-modal-btn-secondary {
+    background: #f0f0f0;
+    color: #333;
+    border: 1px solid #ddd;
+  }
 </style>
-<div class="content">
-  <h1>ICA components</h1>
-  $content
+
+<!-- Rica Button -->
+<div class="rica-button-container">
+  <button type="button" class="rica-button" onclick="openRicaModal()" aria-haspopup="dialog">
+    🔍 Open in Rica
+  </button>
 </div>
-<div class="carpet-plots">
-  <h1>Carpet plots</h1>
-  <div class="carpet-wrapper">
-    <div class="carpet-buttons">$buttons</div>
-    <div class="carpet-plots-image">
-      <img id="imgCarpetPlot" src="$initialCarpet" />
+
+<!-- Rica Modal -->
+<div class="rica-modal-overlay" id="ricaModal" role="dialog" aria-modal="true" aria-labelledby="ricaModalTitle">
+  <div class="rica-modal">
+    <button type="button" class="rica-modal-close" onclick="closeRicaModal()" aria-label="Close modal">×</button>
+    <h2 id="ricaModalTitle">Open in Rica</h2>
+    <p>
+      <strong>Rica</strong> is an interactive web-based tool for exploring ICA components
+      with 3D brain visualization and
+      can be used to manually change component classifications.
+    </p>
+    <p>
+      To view these results in Rica locally, run this command in your output directory:
+    </p>
+    <code>python open_rica_report.py</code>
+    <p style="font-size: 13px; color: #777;">
+      This will download Rica (if needed), start a local server, and open your browser.
+    </p>
+    <div class="rica-modal-buttons">
+      <button type="button" class="rica-modal-btn rica-modal-btn-secondary" onclick="closeRicaModal()">
+        Close
+      </button>
+      <button type="button" class="rica-modal-btn rica-modal-btn-primary" onclick="openRicaWebsite()">
+        Learn more about Rica →
+      </button>
     </div>
   </div>
 </div>
+<div class="content">
+  <h1>ICA components</h1>
+  {{ content }}
+</div>
+<div>{{ tsne }}</div>
+<div class="carpet-plots">
+  <h1>Carpet plots</h1>
+  <div class="carpet-wrapper">
+    <div class="carpet-buttons">{{ buttons }}</div>
+    <div class="carpet-plots-image">
+      <img
+        id="imgCarpetPlot"
+        src="{{ initialCarpet }}"
+        style="width: 95%; max-width: 1200px; height: auto"
+      />
+    </div>
+  </div>
+</div>
+{% if adaptiveMaskExists %}
 <div class="carpet-plots">
   <h1>Adaptive mask</h1>
-  <img id="adaptiveMask" src="$adaptiveMask" style="height: 500px" />
+  <img
+    id="adaptiveMask"
+    src="{{ adaptiveMask }}"
+    style="width: 95%; max-width: 1200px; height: auto"
+  />
 </div>
+{% endif %}
 <div class="carpet-plots">
-  <h1>T2* and S0</h1>
+  {% if t2starExists %}
   <h2>T2*</h2>
   <div class="carpet-plots-image">
-    <img id="t2starBrainPlot" src="$t2starBrainPlot" style="height: 500px" />
+    <img
+      id="t2starBrainPlot"
+      src="{{ t2starBrainPlot }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
   </div>
   <div class="carpet-plots-image">
-    <img id="t2starHistogram" src="$t2starHistogram" style="height: 500px" />
+    <img
+      id="t2starHistogram"
+      src="{{ t2starHistogram }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
   </div>
+  {% endif %} {% if varianceExists %}
+  <h3>T2* Estimate Variance</h3>
+  <div class="carpet-plots-image">
+    <img
+      id="t2starVariancePlot"
+      src="{{ t2starVariancePlot }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
+  </div>
+  {% endif %} {% if s0Exists %}
   <h2>S0</h2>
   <div class="carpet-plots-image">
-    <img id="s0BrainPlot" src="$s0BrainPlot" style="height: 500px" />
+    <img
+      id="s0BrainPlot"
+      src="{{ s0BrainPlot }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
   </div>
   <div class="carpet-plots-image">
-    <img id="s0Histogram" src="$s0Histogram" style="height: 500px" />
+    <img
+      id="s0Histogram"
+      src="{{ s0Histogram }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
+  </div>
+  {% endif %} {% if varianceExists %}
+  <h3>S0 Estimate Variance</h3>
+  <div class="carpet-plots-image">
+    <img
+      id="s0VariancePlot"
+      src="{{ s0VariancePlot }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
+  </div>
+  <h3>T2* and S0 Estimate Covariance</h3>
+  <div class="carpet-plots-image">
+    <img
+      id="t2sS0CovariancePlot"
+      src="{{ t2sS0CovariancePlot }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
+  </div>
+  {% endif %} {% if rmseExists %}
+  <h2>
+    T2* and S0 model fit (RMSE). (Scaled between 2nd and 98th percentiles)
+  </h2>
+  <div class="carpet-plots-image">
+    <img
+      id="rmseBrainPlot"
+      src="{{ rmseBrainPlot }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
+  </div>
+  <div class="carpet-plots-image">
+    <img
+      id="rmseTimeseries"
+      src="{{ rmseTimeseries }}"
+      style="width: 95%; max-width: 1200px; height: auto"
+    />
+  </div>
+  {% endif %}
+</div>
+
+{% if gsr or mir %}
+<div class="carpet-plots">
+  <h2>Global Signal Control</h2>
+    {% if gsr %}
+      <h3>Global Signal Regression</h3>
+      <div class="carpet-plots-image">
+        <img
+          id="gsrPlot"
+          src="{{ gsrPlot }}"
+          style="width: 95%; max-width: 1200px; height: auto"
+        />
+      </div>
+    {% endif %}
+    {% if mir %}
+      <h3>Minimum Image Regression</h3>
+      <div class="carpet-plots-image">
+        <img
+          id="mirPlot"
+          src="{{ mirPlot }}"
+          style="width: 95%; max-width: 1200px; height: auto"
+        />
+      </div>
+    {% endif %}
+</div>
+{% endif %}
+{% if externalRegressorsExist %}
+<div class="carpet-plots">
+  <div class="carpet-plots-image">
+  <h1>External Regressors</h1>
+  <img
+    id="externalRegressorCorrelations"
+    src="{{ externalRegressorCorrelations }}"
+    style="width: 95%; max-width: 1200px; height: auto"
+  />
   </div>
 </div>
-</div>
+{% endif %}
+
 <div class="info">
   <h1>Info</h1>
-  $info
+  {{ info }}
 </div>
 <div class="about">
   <h1>About tedana</h1>
-  $about
+  {{ about }}
 </div>
 <div class="content references">
   <h1>References</h1>
   <ul>
-    $references
+    {{ references }}
   </ul>
 </div>
 
 <script type="text/javascript">
   function updateCarpetPlot(name) {
     // Create variable to hold the image source
-    let carpetPlot = "./figures/$prefix";
+    let carpetPlot = "./figures/{{ prefix }}";
 
     if (name == "optcom") {
       carpetPlot += "carpet_optcom.svg";
@@ -241,6 +524,67 @@
     // Update the image source
     document.getElementById("imgCarpetPlot").src = carpetPlot;
   }
+
+  // Rica modal functions with accessibility support
+  var ricaModalTrigger = null;
+
+  function openRicaModal() {
+    ricaModalTrigger = document.activeElement;
+    var modal = document.getElementById("ricaModal");
+    modal.style.display = "flex";
+    // Focus the close button when modal opens
+    var closeBtn = modal.querySelector(".rica-modal-close");
+    if (closeBtn) closeBtn.focus();
+  }
+
+  function closeRicaModal() {
+    document.getElementById("ricaModal").style.display = "none";
+    // Return focus to the element that opened the modal
+    if (ricaModalTrigger) {
+      ricaModalTrigger.focus();
+      ricaModalTrigger = null;
+    }
+  }
+
+  function openRicaWebsite() {
+    window.open("https://github.com/ME-ICA/rica", "_blank");
+  }
+
+  // Close modal when clicking outside
+  document.getElementById("ricaModal").addEventListener("click", function(event) {
+    if (event.target === this) {
+      closeRicaModal();
+    }
+  });
+
+  // Close modal with Escape key and trap focus within modal
+  document.addEventListener("keydown", function(event) {
+    var modal = document.getElementById("ricaModal");
+    if (modal.style.display !== "flex") return;
+
+    if (event.key === "Escape") {
+      closeRicaModal();
+      return;
+    }
+
+    // Trap focus within modal
+    if (event.key === "Tab") {
+      var focusable = modal.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+      if (!focusable || focusable.length === 0) {
+        return;
+      }
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  });
 </script>
 
-$javascript
+{{ javascript }}

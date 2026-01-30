@@ -1,8 +1,11 @@
 """Utility functions for tedana.selection."""
 
 import logging
+import re
+from typing import Dict, List, Union
 
 import numpy as np
+import pandas as pd
 
 from tedana.stats import getfbounds
 
@@ -14,7 +17,9 @@ RepLGR = logging.getLogger("REPORT")
 ##############################################################
 
 
-def selectcomps2use(component_table, decide_comps):
+def selectcomps2use(
+    component_table: pd.DataFrame, decide_comps: Union[str, List[str], List[int]]
+) -> List[int]:
     """Get a list of component numbers that fit the classification types in ``decide_comps``.
 
     Parameters
@@ -83,14 +88,14 @@ def selectcomps2use(component_table, decide_comps):
 
 
 def change_comptable_classifications(
-    selector,
-    if_true,
-    if_false,
-    decision_boolean,
-    tag_if_true=None,
-    tag_if_false=None,
-    dont_warn_reclassify=False,
-):
+    selector,  # ComponentSelector
+    if_true: str,
+    if_false: str,
+    decision_boolean: pd.Series,
+    tag_if_true: str = None,
+    tag_if_false: str = None,
+    dont_warn_reclassify: bool = False,
+):  # -> Tuple[ComponentSelector, int, int]
     """
     Change or don't change the component classification.
 
@@ -166,13 +171,13 @@ def change_comptable_classifications(
 
 
 def comptable_classification_changer(
-    selector,
-    boolstate,
-    classify_if,
-    decision_boolean,
-    tag_if=None,
-    dont_warn_reclassify=False,
-):
+    selector,  # : ComponentSelector,
+    boolstate: bool,
+    classify_if: str,
+    decision_boolean: pd.Series,
+    tag_if: Union[str, None] = None,
+    dont_warn_reclassify: bool = False,
+):  # -> ComponentSelector
     """Implement the component classification changes from ``change_comptable_classifications``.
 
     Parameters
@@ -229,12 +234,12 @@ def comptable_classification_changer(
     This function is run twice, ones for changes to make of a component is
     True and again for components that are False.
     """
-    if classify_if != "nochange":
-        changeidx = decision_boolean.index[np.asarray(decision_boolean) == boolstate]
-        if not changeidx.empty:
-            current_classifications = set(
-                selector.component_table_.loc[changeidx, "classification"].tolist()
-            )
+    changeidx = decision_boolean.index[np.asarray(decision_boolean) == boolstate]
+    if not changeidx.empty:
+        current_classifications = set(
+            selector.component_table_.loc[changeidx, "classification"].tolist()
+        )
+        if classify_if != "nochange":
             if current_classifications.intersection({"accepted", "rejected"}):
                 if not dont_warn_reclassify:
                     # don't make a warning if classify_if matches the current classification
@@ -248,6 +253,28 @@ def comptable_classification_changer(
                             "accepted or rejected, it shouldn't be reclassified"
                         )
             selector.component_table_.loc[changeidx, "classification"] = classify_if
+
+        if tag_if is not None:  # only run if a tag is provided
+            # if tag_if has commas, divide into multiple tags
+            if "," in tag_if:
+                multi_tags = tag_if.split(",")
+                tag_if = set([s.strip() for s in multi_tags])
+            else:
+                tag_if = {tag_if}
+
+            for idx in changeidx:
+                tmpstr = selector.component_table_.loc[idx, "classification_tags"]
+                if tmpstr == "" or isinstance(tmpstr, float):
+                    tmpset = tag_if
+                else:
+                    tmpset = set(tmpstr.split(","))
+                    tmpset = tmpset.union(tag_if)
+                selector.component_table_.loc[idx, "classification_tags"] = ",".join(
+                    str(s) for s in tmpset
+                )
+
+        # Do this last step if anything changed in the component table
+        if classify_if != "nochange" or tag_if is not None:
             # NOTE: CAUTION: extremely bizarre pandas behavior violates guarantee
             # that df['COLUMN'] matches the df as a a whole in this case.
             # We cannot replicate this consistently, but it seems to happen in some
@@ -262,26 +289,15 @@ def comptable_classification_changer(
             #   a subset of components
             selector.component_table_ = selector.component_table_.copy()
 
-            if tag_if is not None:  # only run if a tag is provided
-                for idx in changeidx:
-                    tmpstr = selector.component_table_.loc[idx, "classification_tags"]
-                    if tmpstr == "" or isinstance(tmpstr, float):
-                        tmpset = {tag_if}
-                    else:
-                        tmpset = set(tmpstr.split(","))
-                        tmpset.update([tag_if])
-                    selector.component_table_.loc[idx, "classification_tags"] = ",".join(
-                        str(s) for s in tmpset
-                    )
-        else:
-            LGR.info(
-                f"Step {selector.current_node_idx_}: No components fit criterion "
-                f"{boolstate} to change classification"
-            )
+    else:
+        LGR.info(
+            f"Step {selector.current_node_idx_}: No components fit criterion "
+            f"{boolstate} to change classification"
+        )
     return selector
 
 
-def clean_dataframe(component_table):
+def clean_dataframe(component_table: pd.DataFrame) -> pd.DataFrame:
     """
     Reorder columns in component table.
 
@@ -313,18 +329,27 @@ def clean_dataframe(component_table):
 #################################################
 
 
-def confirm_metrics_exist(component_table, necessary_metrics, function_name=None):
-    """Confirm that all metrics declared in necessary_metrics are already included in comptable.
+def confirm_metrics_exist(
+    component_table: pd.DataFrame,
+    necessary_metrics: List[str],
+    function_name: Union[str, None] = None,
+) -> Union[None, bool]:
+    """Confirm that all metrics in necessary_metrics are in component_table.
 
     Parameters
     ----------
     component_table : (C x M) :obj:`pandas.DataFrame`
         Component metric table. One row for each component, with a column for
         each metric. The index should be the component number.
-    necessary_metrics : :obj:`list`
+    necessary_metrics : :obj:`list[str]`
         A list of strings of metric names.
     function_name : :obj:`str`
         Text identifying the function name that called this function.
+
+    Returns
+    -------
+    metrics_are_missing : :obj:`bool`
+        If there are no metrics missing, this returns True.
 
     Raises
     ------
@@ -337,26 +362,42 @@ def confirm_metrics_exist(component_table, necessary_metrics, function_name=None
     Also, the string in ``necessary_metrics`` and the column labels in ``component_table`` will
     only be matched if they're identical.
     """
-    missing_metrics = set(necessary_metrics) - set(component_table.columns)
-    if missing_metrics:
-        function_name = function_name or "unknown function"
-        raise ValueError(
-            f"Necessary metrics for {function_name}: {necessary_metrics}. "
+    hardcoded_metrics = [metric for metric in necessary_metrics if not metric.startswith("^")]
+    regex_metrics = [metric for metric in necessary_metrics if metric.startswith("^")]
+    # Check that all hardcoded (literal string) metrics are accounted for.
+    missing_metrics = sorted(list(set(hardcoded_metrics) - set(component_table.columns)))
+    # Check that the regular expression-based metrics are accounted for.
+    found_metrics = component_table.columns.tolist()
+    for regex_metric in regex_metrics:
+        if not any(re.match(regex_metric, metric) for metric in found_metrics):
+            missing_metrics.append(regex_metric)
+
+    metrics_are_missing = len(missing_metrics) > 0
+    if metrics_are_missing:
+        if function_name is None:
+            function_name = "unknown function"
+
+        error_msg = (
+            f"Necessary metrics for {function_name}: "
+            f"{necessary_metrics}. "
             f"Comptable metrics: {set(component_table.columns)}. "
             f"MISSING METRICS: {missing_metrics}."
         )
+        raise ValueError(error_msg)
+
+    return metrics_are_missing
 
 
 def log_decision_tree_step(
-    function_name_idx,
-    comps2use,
-    decide_comps=None,
-    n_true=None,
-    n_false=None,
-    if_true=None,
-    if_false=None,
-    calc_outputs=None,
-):
+    function_name_idx: str,
+    comps2use: Union[List[int], int],
+    decide_comps: Union[str, List[str], List[int], None] = None,
+    n_true: Union[int, None] = None,
+    n_false: Union[int, None] = None,
+    if_true: Union[str, None] = None,
+    if_false: Union[str, None] = None,
+    calc_outputs: Union[Dict, None] = None,
+) -> None:
     """Log text to add after every decision tree calculation.
 
     Parameters
@@ -423,7 +464,7 @@ def log_decision_tree_step(
             )
 
 
-def log_classification_counts(decision_node_idx, component_table):
+def log_classification_counts(decision_node_idx: int, component_table: pd.DataFrame) -> None:
     """Log the total counts for each component classification in component_table.
 
     Parameters
@@ -550,7 +591,7 @@ def getelbow(arr, return_val=False):
         return k_min_ind
 
 
-def kappa_elbow_kundu(component_table, n_echos, comps2use=None):
+def kappa_elbow_kundu(component_table, n_independent_echos, comps2use=None):
     """
     Calculate an elbow for kappa.
 
@@ -562,8 +603,10 @@ def kappa_elbow_kundu(component_table, n_echos, comps2use=None):
         Component metric table. One row for each component, with a column for
         each metric. The index should be the component number.
         Only the 'kappa' column is used in this function
-    n_echos : :obj:`int`
-        The number of echos in the multi-echo data
+    n_independent_echos : :obj:`int`
+        Number of independent echoes to use in goodness of fit metrics (fstat).
+        Typically the number of echos in the multi-echo data
+        May be a lower value for EPTI acquisitions.
     comps2use : :obj:`list[int]`
         A list of component indices used to calculate the elbow
         default=None which means use all components
@@ -603,7 +646,7 @@ def kappa_elbow_kundu(component_table, n_echos, comps2use=None):
     kappas2use = component_table.loc[comps2use, "kappa"].to_numpy()
 
     # low kappa threshold
-    _, _, f01 = getfbounds(n_echos)
+    _, _, f01 = getfbounds(n_independent_echos)
     # get kappa values for components below a significance threshold
     kappas_nonsig = kappas2use[kappas2use < f01]
 
@@ -640,7 +683,11 @@ def kappa_elbow_kundu(component_table, n_echos, comps2use=None):
 
 
 def rho_elbow_kundu_liberal(
-    component_table, n_echos, rho_elbow_type="kundu", comps2use=None, subset_comps2use=-1
+    component_table,
+    n_independent_echos,
+    rho_elbow_type="kundu",
+    comps2use=None,
+    subset_comps2use=-1,
 ):
     """
     Calculate an elbow for rho.
@@ -654,8 +701,10 @@ def rho_elbow_kundu_liberal(
         Component metric table. One row for each component, with a column for
         each metric. The index should be the component number.
         Only the 'kappa' column is used in this function
-    n_echos : :obj:`int`
-        The number of echos in the multi-echo data
+    n_independent_echos : :obj:`int`
+        Number of independent echoes to use in goodness of fit metrics (fstat).
+        Typically the number of echos in the multi-echo data
+        May be a lower value for EPTI acquisitions.
     rho_elbow_type : :obj:`str`
         The algorithm used to calculate the rho elbow. Current options are
         'kundu' and 'liberal'.
@@ -723,8 +772,7 @@ def rho_elbow_kundu_liberal(
         ].tolist()
 
     # One rho elbow threshold set just on the number of echoes
-    elbow_f05, _, _ = getfbounds(n_echos)
-
+    elbow_f05, _, _ = getfbounds(n_independent_echos)
     # One rho elbow threshold set using all componets in comps2use
     rhos_comps2use = component_table.loc[comps2use, "rho"].to_numpy()
     rho_allcomps_elbow = getelbow(rhos_comps2use, return_val=True)

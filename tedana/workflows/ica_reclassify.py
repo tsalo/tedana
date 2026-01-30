@@ -12,13 +12,10 @@ import numpy as np
 import pandas as pd
 
 import tedana.gscontrol as gsc
-from tedana import __version__, io, reporting, selection, utils
+from tedana import __version__, io, reporting, rica, selection, utils
 from tedana.bibtex import get_description_references
-from tedana.io import (
-    ALLOWED_COMPONENT_DELIMITERS,
-    fname_to_component_list,
-    str_to_component_list,
-)
+from tedana.io import ALLOWED_COMPONENT_DELIMITERS
+from tedana.workflows.parser_utils import parse_manual_list_int, parse_manual_list_str
 
 LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
@@ -69,6 +66,30 @@ def _get_parser():
         default=[],
     )
     optional.add_argument(
+        "--tagacc",
+        dest="tag_accept",
+        nargs="+",
+        help=(
+            "Classification tag(s) to add to accepted components."
+            "Will be applied to all listed accepted components, "
+            "even if they were already accepted."
+            "Supply a single tag or a comma-delimited list."
+        ),
+        default=[],
+    )
+    optional.add_argument(
+        "--tagrej",
+        dest="tag_reject",
+        nargs="+",
+        help=(
+            "Classification tag(s) to add to rejected components."
+            "Will be applied to all listed rejected components, "
+            "even if they were already rejected."
+            "Supply a single tag or a comma-delimited list."
+        ),
+        default=[],
+    )
+    optional.add_argument(
         "--config",
         dest="config",
         help="File naming configuration.",
@@ -94,6 +115,13 @@ def _get_parser():
         default="bids",
     )
     optional.add_argument(
+        "--dummy-scans",
+        dest="dummy_scans",
+        type=int,
+        help="Number of dummy scans to remove from the beginning of the data.",
+        default=0,
+    )
+    optional.add_argument(
         "--tedort",
         dest="tedort",
         action="store_true",
@@ -101,11 +129,18 @@ def _get_parser():
         default=False,
     )
     optional.add_argument(
-        "--mir",
-        dest="mir",
-        action="store_true",
-        help="Run minimum image regression.",
-        default=False,
+        "--gscontrol",
+        dest="gscontrol",
+        required=False,
+        action="store",
+        nargs="+",
+        help=(
+            "Perform additional denoising to remove spatially diffuse noise. "
+            "This argument can be single value or a space delimited list. "
+            "'gsr' will only work if the previous tedana run used --gscontrol gsr."
+        ),
+        choices=["gsr", "mir"],
+        default="",
     )
     optional.add_argument(
         "--no-reports",
@@ -121,6 +156,13 @@ def _get_parser():
     )
     optional.add_argument(
         "--png-cmap", dest="png_cmap", type=str, help="Colormap for figures", default="coolwarm"
+    )
+    optional.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Generate intermediate and additional files.",
+        default=False,
     )
     optional.add_argument(
         "--debug",
@@ -164,84 +206,41 @@ def _main(argv=None):
         args.registry,
         accept=args.manual_accept,
         reject=args.manual_reject,
+        tag_accept=args.tag_accept,
+        tag_reject=args.tag_reject,
         out_dir=args.out_dir,
         config=args.config,
         prefix=args.prefix,
         convention=args.convention,
+        dummy_scans=args.dummy_scans,
         tedort=args.tedort,
-        mir=args.mir,
+        gscontrol=args.gscontrol,
         no_reports=args.no_reports,
         png_cmap=args.png_cmap,
         overwrite=args.overwrite,
+        verbose=args.verbose,
         debug=args.debug,
         quiet=args.quiet,
         reclassify_command=reclassify_command,
     )
 
 
-def _parse_manual_list(manual_list):
-    """
-    Parse the list of components to accept or reject into a list of integers.
-
-    Parameters
-    ----------
-    manual_list : :obj:`str` :obj:`list[str]` or [] or None
-        String of integers separated by spaces, commas, or tabs
-        A file name for a file that contains integers
-
-    Returns
-    -------
-    manual_nums : :obj:`list[int]`
-        A list of integers or an empty list.
-
-    Note
-    ----
-    Do not need to check if integers are less than 0 or greater than the total
-    number of components here, because it is later checked in selectcomps2use
-    and a descriptive error message will appear there
-    """
-    if not manual_list:
-        manual_nums = []
-    elif op.exists(op.expanduser(str(manual_list[0]).strip(" "))):
-        # filename was given
-        manual_nums = fname_to_component_list(op.expanduser(str(manual_list[0]).strip(" ")))
-    elif len(manual_list) > 1:
-        # Assume that this is a list of integers, but raise error if not
-        manual_nums = []
-        for x in manual_list:
-            if float(x) == int(x):
-                manual_nums.append(int(x))
-            else:
-                raise ValueError(
-                    "_parse_manual_list expected a list of integers, "
-                    f"but the input is {manual_list}"
-                )
-    elif isinstance(manual_list[0], str):
-        # arbitrary string was given, length of list is 1
-        manual_nums = str_to_component_list(manual_list[0])
-    elif isinstance(manual_list[0], int):
-        # Is a single integer and should remain a list with a single integer
-        manual_nums = manual_list
-    else:
-        raise ValueError(
-            f"_parse_manual_list expected integers or a filename, but the input is {manual_list}"
-        )
-
-    return manual_nums
-
-
 def ica_reclassify_workflow(
     registry,
     accept=[],
     reject=[],
+    tag_accept=[],
+    tag_reject=[],
     out_dir=".",
     config="auto",
     convention="bids",
     prefix="",
+    dummy_scans=0,
     tedort=False,
-    mir=False,
+    gscontrol=None,
     no_reports=False,
     png_cmap="coolwarm",
+    verbose=False,
     overwrite=False,
     debug=False,
     quiet=False,
@@ -260,19 +259,30 @@ def ica_reclassify_workflow(
         A list of integer values of components to accept in this workflow.
     reject : :obj: `list`
         A list of integer values of components to reject in this workflow.
+    tag_accept : :obj: `list`
+        A list of classification tags to add to accepted components.
+        Will be applied to all listed accepted components, even if they were already accepted.
+    tag_reject : :obj: `list`
+        A list of classification tags to add to rejected components.
+        Will be applied to all listed rejected components, even if they were already rejected.
     out_dir : :obj:`str`, optional
         Output directory.
+    dummy_scans : :obj:`int`, optional
+        Number of dummy scans to remove from the beginning of the data. Default is 0.
     tedort : :obj:`bool`, optional
         Orthogonalize rejected components w.r.t. accepted ones prior to
         denoising. Default is False.
-    mir : :obj:`bool`, optional
-        Run minimum image regression after denoising. Default is False.
+    gscontrol : {None, 'gsr', 'mir'} or :obj:`list`, optional
+        Perform additional denoising to remove spatially diffuse noise.
+        Default is None.
     no_reports : obj:'bool', optional
         Do not generate .html reports and .png plots. Default is false such
         that reports are generated.
     png_cmap : obj:'str', optional
         Name of a matplotlib colormap to be used when generating figures.
         Cannot be used with --no-png. Default is 'coolwarm'.
+    verbose : :obj:`bool`, optional
+        Generate intermediate and additional files. Default is False.
     debug : :obj:`bool`, optional
         Whether to run in debugging mode or not. Default is False.
     overwrite : :obj:`bool`, optional
@@ -323,11 +333,21 @@ def ica_reclassify_workflow(
     logname = op.join(out_dir, (basename + start_time + "." + extension))
     utils.setup_loggers(logname=logname, repname=repname, quiet=quiet, debug=debug)
 
+    # Coerce gscontrol to list
+    if not isinstance(gscontrol, list):
+        gscontrol = [gscontrol]
+
     # If accept and reject are a list of integers, they stay the same
     # If they are a filename, load numbers of from
     # If they are a string of values, convert to a list of ints
-    accept = _parse_manual_list(accept)
-    reject = _parse_manual_list(reject)
+    accept = parse_manual_list_int(accept)
+    reject = parse_manual_list_int(reject)
+
+    # If classification tags are a list of strings without commas, they stay the same.
+    # If classification tags are a single string,
+    # convert to a list with a single string or a split into a comma delimited list of strings.
+    tag_accept = parse_manual_list_str(tag_accept)
+    tag_reject = parse_manual_list_str(tag_reject)
 
     # Check that there is no overlap in accepted/rejected components
     if accept:
@@ -340,9 +360,6 @@ def ica_reclassify_workflow(
         rej = ()
 
     if (not accept) and (not reject):
-        # TODO: remove
-        print(accept)
-        print(reject)
         raise ValueError("Must manually accept or reject at least one component")
 
     in_both = []
@@ -373,30 +390,39 @@ def ica_reclassify_workflow(
     LGR.info(f"Using output directory: {out_dir}")
 
     ioh = io.InputHarvester(registry)
-    comptable = ioh.get_file_contents("ICA metrics tsv")
+    component_table = ioh.get_file_contents("ICA metrics tsv")
     xcomp = ioh.get_file_contents("ICA cross component metrics json")
     status_table = ioh.get_file_contents("ICA status table tsv")
     previous_tree_fname = ioh.get_file_path("ICA decision tree json")
-    mmix = np.asarray(ioh.get_file_contents("ICA mixing tsv"))
+    mixing = np.asarray(ioh.get_file_contents("ICA mixing tsv"))
     adaptive_mask = ioh.get_file_contents("adaptive mask img")
     # If global signal was removed in the previous run, we can assume that
     # the user wants to use that file again. If not, use the default of
     # optimally combined data.
-    gskey = "removed gs combined img"
-    if ioh.get_file_path(gskey):
-        data_oc = ioh.get_file_contents(gskey)
-        used_gs = True
+    if "gsr" in gscontrol:
+        key = "removed gs combined img"
+        if not ioh.get_file_path(key):
+            raise FileNotFoundError(
+                f"File '{key}' not found in registry. "
+                "Did you originally run tedana with --gscontrol gsr?"
+            )
+        data_optcom = ioh.get_file_contents(key)
     else:
-        data_oc = ioh.get_file_contents("combined img")
-        used_gs = False
+        data_optcom = ioh.get_file_contents("combined img")
+
+    if verbose:
+        LGR.debug("Loading input 4D data")
+        data_cat = ioh.get_file_contents("input img")
+        # Extract the data from the nibabel objects
+        data_cat, _ = io.load_data(data_cat, n_echos=len(data_cat), dummy_scans=dummy_scans)
 
     io_generator = io.OutputGenerator(
-        data_oc,
+        data_optcom,
         convention=convention,
         prefix=prefix,
         config=config,
         overwrite=overwrite,
-        verbose=False,
+        verbose=verbose,
         out_dir=out_dir,
         old_registry=ioh.registry,
     )
@@ -405,36 +431,39 @@ def ica_reclassify_workflow(
     selector = selection.component_selector.ComponentSelector(previous_tree_fname)
 
     if accept:
-        selector.add_manual(accept, "accepted")
+        selector.add_manual(accept, "accepted", classification_tags=tag_accept)
 
     if reject:
-        selector.add_manual(reject, "rejected")
+        selector.add_manual(reject, "rejected", classification_tags=tag_reject)
 
     selector.select(
-        comptable,
+        component_table,
         cross_component_metrics=xcomp,
         status_table=status_table,
     )
-    comptable = selector.component_table_
+    component_table = selector.component_table_
 
     # NOTE: most of these will be identical to previous, but this makes
     # things easier for programs which will view the data after running.
     # First, make the output generator
-    comp_names = comptable["Component"].values
-    mixing_df = pd.DataFrame(data=mmix, columns=comp_names)
+    comp_names = component_table["Component"].values
+    mixing_df = pd.DataFrame(data=mixing, columns=comp_names)
     to_copy = [
-        "z-scored ICA components img",
         "ICA mixing tsv",
         "ICA decomposition json",
         "ICA metrics json",
     ]
-    if used_gs:
-        to_copy.append(gskey)
+    if "gsr" in gscontrol:
+        to_copy.append("removed gs combined img")
         to_copy.append("has gs combined img")
 
     for tc in to_copy:
         print(tc)
         io_generator.save_file(ioh.get_file_contents(tc), tc)
+
+    # calculate the fit of rejected to accepted components to use as a quality measure
+    # Note: This adds a column to component_table & needs to run before the table is saved
+    reporting.quality_metrics.calculate_rejected_components_impact(selector, mixing)
 
     # Save component selector and tree
     selector.to_files(io_generator)
@@ -445,22 +474,22 @@ def ica_reclassify_workflow(
             "Please check data and results!"
         )
 
-    mmix_orig = mmix.copy()
+    mixing_orig = mixing.copy()
     # TODO: make this a function
     if tedort:
         comps_accepted = selector.accepted_comps_
         comps_rejected = selector.rejected_comps_
-        acc_ts = mmix[:, comps_accepted]
-        rej_ts = mmix[:, comps_rejected]
+        acc_ts = mixing[:, comps_accepted]
+        rej_ts = mixing[:, comps_rejected]
         betas = np.linalg.lstsq(acc_ts, rej_ts, rcond=None)[0]
         pred_rej_ts = np.dot(acc_ts, betas)
         resid = rej_ts - pred_rej_ts
-        mmix[:, comps_rejected] = resid
+        mixing[:, comps_rejected] = resid
         comp_names = [
-            io.add_decomp_prefix(comp, prefix="ica", max_value=comptable.index.max())
+            io.add_decomp_prefix(comp, prefix="ica", max_value=component_table.index.max())
             for comp in range(selector.n_comps_)
         ]
-        mixing_df = pd.DataFrame(data=mmix, columns=comp_names)
+        mixing_df = pd.DataFrame(data=mixing, columns=comp_names)
         io_generator.save_file(mixing_df, "ICA orthogonalized mixing tsv")
         RepLGR.info(
             "Rejected components' time series were then "
@@ -471,7 +500,7 @@ def ica_reclassify_workflow(
     # img_t_r = io_generator.reference_img.header.get_zooms()[-1]
     adaptive_mask = utils.reshape_niimg(adaptive_mask)
     mask_denoise = adaptive_mask >= 1
-    data_oc = utils.reshape_niimg(data_oc)
+    data_optcom = utils.reshape_niimg(data_optcom)
 
     # TODO: make a better result-writing function
     # #############################################!!!!
@@ -480,17 +509,28 @@ def ica_reclassify_workflow(
     #       - get_ts_regress/residual_tag(include=[], exclude=[])
     #       How to handle [acc/rej] + tag ?
     io.writeresults(
-        data_oc,
+        data_optcom,
         mask=mask_denoise,
-        comptable=comptable,
-        mmix=mmix,
+        component_table=component_table,
+        mixing=mixing,
         io_generator=io_generator,
     )
 
-    if mir:
+    if "mir" in gscontrol:
         io_generator.overwrite = True
-        gsc.minimum_image_regression(data_oc, mmix, mask_denoise, comptable, io_generator)
+        gsc.minimum_image_regression(
+            data_optcom=data_optcom,
+            mixing=mixing,
+            mask=mask_denoise,
+            component_table=component_table,
+            classification_tags=selector.classification_tags,
+            io_generator=io_generator,
+        )
         io_generator.overwrite = False
+
+    if verbose:
+        LGR.debug("Writing out verbose data")
+        io.writeresults_echoes(data_cat, mixing, mask_denoise, component_table, io_generator)
 
     # Write out BIDS-compatible description file
     derivative_metadata = {
@@ -525,6 +565,7 @@ def ica_reclassify_workflow(
     with open(repname) as fo:
         report = [line.rstrip() for line in fo.readlines()]
         report = " ".join(report)
+
     with open(repname, "w") as fo:
         fo.write(report)
 
@@ -537,18 +578,10 @@ def ica_reclassify_workflow(
     if not no_reports:
         LGR.info("Making figures folder with static component maps and timecourse plots.")
 
-        dn_ts, hikts, lowkts = io.denoise_ts(data_oc, mmix, mask_denoise, comptable)
-
-        # Figure out which control methods were used
-        gscontrol = []
-        if used_gs:
-            gscontrol.append("gsr")
-        if mir:
-            gscontrol.append("mir")
-        gscontrol = None if gscontrol == [] else gscontrol
+        dn_ts, hikts, lowkts = io.denoise_ts(data_optcom, mixing, mask_denoise, component_table)
 
         reporting.static_figures.carpet_plot(
-            optcom_ts=data_oc,
+            optcom_ts=data_optcom,
             denoised_ts=dn_ts,
             hikts=hikts,
             lowkts=lowkts,
@@ -557,19 +590,27 @@ def ica_reclassify_workflow(
             gscontrol=gscontrol,
         )
         reporting.static_figures.comp_figures(
-            data_oc,
+            data_optcom,
             mask=mask_denoise,
-            comptable=comptable,
-            mmix=mmix_orig,
+            component_table=component_table,
+            mixing=mixing_orig,
             io_generator=io_generator,
             png_cmap=png_cmap,
         )
 
         LGR.info("Generating dynamic report")
-        reporting.generate_report(io_generator)
+        reporting.generate_report(io_generator, cluster_labels=None, similarity_t_sne=None)
 
     io_generator.save_self()
+
+    # Generate Rica launcher script
+    rica.setup_rica_report(io_generator.out_dir)
+
     LGR.info("Workflow completed")
+
+    # Add newsletter info to the log
+    utils.log_newsletter_info()
+
     utils.teardown_loggers()
 
 

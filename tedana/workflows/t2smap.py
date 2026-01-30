@@ -8,10 +8,10 @@ import sys
 
 import numpy as np
 from nilearn.masking import compute_epi_mask
-from scipy import stats
 from threadpoolctl import threadpool_limits
 
 from tedana import __version__, combine, decay, io, utils
+from tedana.utils import parse_volume_indices
 from tedana.workflows.parser_utils import is_valid_file
 
 LGR = logging.getLogger("GENERAL")
@@ -51,7 +51,10 @@ def _get_parser():
         nargs="+",
         metavar="TE",
         type=float,
-        help="Echo times (in ms). E.g., 15.0 39.0 63.0",
+        help=(
+            "Echo times in seconds (per BIDS convention). E.g., 0.015 0.039 0.063. "
+            "Millisecond values (e.g., 15.0 39.0 63.0) are still accepted but deprecated."
+        ),
         required=True,
     )
     optional.add_argument(
@@ -84,6 +87,29 @@ def _get_parser():
         choices=["orig", "bids"],
         help=("Filenaming convention. bids will use the latest BIDS derivatives version."),
         default="bids",
+    )
+    optional.add_argument(
+        "--dummy-scans",
+        dest="dummy_scans",
+        type=int,
+        help="Number of dummy scans to remove from the beginning of the data.",
+        default=0,
+    )
+    optional.add_argument(
+        "--exclude",
+        dest="exclude",
+        type=str,
+        help=(
+            "Volume indices to exclude from adaptive mask generation and T2* and S0 estimation, "
+            "but which will be retained in the optimally combined data. "
+            "Can be individual indices (e.g., '0,5,10'), ranges (e.g., '5:10'), "
+            "or a mix of the two (e.g., '0,5:10,15'). "
+            "Indices are 0-based. "
+            "As in Python lists, ranges are start-inclusive and end-exclusive "
+            "(for example, '0:5' includes the first [0] through fifth [4] timepoints). "
+            "Default is to not exclude any volumes."
+        ),
+        default=None,
     )
     optional.add_argument(
         "--masktype",
@@ -133,6 +159,18 @@ def _get_parser():
         default="t2s",
     )
     optional.add_argument(
+        "--n-independent-echos",
+        dest="n_independent_echos",
+        metavar="INT",
+        type=int,
+        help=(
+            "Number of independent echoes to use in goodness of fit metrics (fstat)."
+            "Primarily used for EPTI acquisitions."
+            "If not provided, number of echoes will be used."
+        ),
+        default=None,
+    )
+    optional.add_argument(
         "--n-threads",
         dest="n_threads",
         type=int,
@@ -152,6 +190,21 @@ def _get_parser():
     optional.add_argument(
         "--quiet", dest="quiet", help=argparse.SUPPRESS, action="store_true", default=False
     )
+    optional.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Generate intermediate and additional files.",
+        default=False,
+    )
+    optional.add_argument(
+        "--overwrite",
+        "-f",
+        dest="overwrite",
+        action="store_true",
+        help="Force overwriting of files.",
+        default=False,
+    )
     parser._action_groups.append(optional)
     return parser
 
@@ -159,16 +212,22 @@ def _get_parser():
 def t2smap_workflow(
     data,
     tes,
+    n_independent_echos=None,
     out_dir=".",
     mask=None,
     prefix="",
     convention="bids",
+    dummy_scans=0,
+    exclude=None,
     masktype=["dropout"],
     fittype="loglin",
     fitmode="all",
     combmode="t2s",
     debug=False,
+    verbose=False,
     quiet=False,
+    overwrite=False,
+    n_threads=1,
     t2smap_command=None,
 ):
     """
@@ -182,12 +241,27 @@ def t2smap_workflow(
         Either a single z-concatenated file (single-entry list or str) or a
         list of echo-specific files, in ascending order.
     tes : :obj:`list`
-        List of echo times associated with data in milliseconds.
+        List of echo times associated with data. Values should be in seconds
+        per BIDS convention. Millisecond values are still accepted but deprecated.
+    n_independent_echos : :obj:`int`, optional
+        Number of independent echoes to use in goodness of fit metrics (fstat).
+        Primarily used for EPTI acquisitions.
+        If None, number of echoes will be used. Default is None.
     out_dir : :obj:`str`, optional
         Output directory.
     mask : :obj:`str`, optional
         Binary mask of voxels to include in TE Dependent ANAlysis. Must be spatially
         aligned with `data`.
+    dummy_scans : :obj:`int`, optional
+        Number of dummy scans to remove from the beginning of the data. Default is 0.
+        dummy_scans are excluded from the optimally combined data.
+    exclude : :obj:`str`, optional
+        Volume indices to exclude from adaptive mask generation and T2* and S0 estimation,
+        but which will be retained in the optimally combined data.
+        Can be individual indices (e.g., '0,5,10'), ranges (e.g., '5:10'),
+        or a mix of the two (e.g., '0,5:10,15').
+        Indices are 0-based.
+        Default is to not exclude any volumes.
     masktype : :obj:`list` with 'dropout' and/or 'decay' or None, optional
         Method(s) by which to define the adaptive mask. Default is ["dropout"].
     fittype : {'loglin', 'curvefit'}, optional
@@ -203,6 +277,14 @@ def t2smap_workflow(
         Default is 'all'.
     combmode : {'t2s', 'paid'}, optional
         Combination scheme for TEs: 't2s' (Posse 1999, default), 'paid' (Poser).
+    verbose : :obj:`bool`, optional
+        Generate intermediate and additional files. Default is False.
+    overwrite : :obj:`bool`, optional
+        If True, force overwriting of files. Default is False.
+    n_threads : :obj:`int`, optional
+        Number of threads to use. Used by threadpoolctl to set the parameter
+        outside of the workflow function, as well as the number of threads to use
+        for the decay model fitting. Default is 1.
     t2smap_command : :obj:`str`, optional
         The command used to run t2smap. Default is None.
 
@@ -247,6 +329,10 @@ def t2smap_workflow(
     if not op.isdir(out_dir):
         os.mkdir(out_dir)
 
+    # Parse exclude parameter
+    exclude_idx = parse_volume_indices(exclude)
+    n_exclude = len(exclude_idx)
+
     utils.setup_loggers(quiet=quiet, debug=debug)
 
     LGR.info(f"Using output directory: {out_dir}")
@@ -267,8 +353,27 @@ def t2smap_workflow(
     info_dict = utils.get_system_version_info()
     info_dict["Command"] = t2smap_command
 
+    if fitmode == "ts" and n_exclude > 0:
+        raise ValueError(
+            "Excluding volumes is not supported for fitmode='ts'. "
+            "Please set fitmode='all' or remove the exclude argument."
+        )
+
+    if dummy_scans > 0:
+        LGR.warning(f"Removing the first {dummy_scans} volumes as dummy scans.")
+    if n_exclude > 0:
+        LGR.info(f"Excluding volumes: {exclude_idx}")
+        # Adjust exclude indices for dummy scans that are already removed
+        exclude_idx = np.setdiff1d(exclude_idx, np.arange(dummy_scans))
+        # Offset exclude indices by the number of dummy scans so they index into loaded data_cat
+        exclude_idx = exclude_idx - dummy_scans
+        n_exclude = len(exclude_idx)
+        if n_exclude == 0:
+            LGR.warning(f"All exclude indices overlap with dummy scans ({dummy_scans}).")
+
     # ensure tes are in appropriate format
     tes = [float(te) for te in tes]
+    tes = utils.check_te_values(tes)
     n_echos = len(tes)
 
     # coerce data to samples x echos x time array
@@ -276,7 +381,7 @@ def t2smap_workflow(
         data = [data]
 
     LGR.info(f"Loading input data: {[f for f in data]}")
-    catd, ref_img = io.load_data(data, n_echos=n_echos)
+    data_cat, ref_img = io.load_data(data, n_echos=n_echos, dummy_scans=dummy_scans)
     io_generator = io.OutputGenerator(
         ref_img,
         convention=convention,
@@ -284,67 +389,113 @@ def t2smap_workflow(
         prefix=prefix,
         config="auto",
         make_figures=False,
+        overwrite=overwrite,
+        verbose=verbose,
     )
-    n_echos = catd.shape[1]
-    LGR.debug(f"Resulting data shape: {catd.shape}")
+    n_echos, n_vols = data_cat.shape[1], data_cat.shape[2]
+    LGR.debug(f"Resulting data shape: {data_cat.shape}")
 
     if mask is None:
         LGR.info(
             "Computing initial mask from the first echo using nilearn's compute_epi_mask function."
         )
-        first_echo_img = io.new_nii_like(io_generator.reference_img, catd[:, 0, :])
+        first_echo_img = io.new_nii_like(io_generator.reference_img, data_cat[:, 0, :])
         mask = compute_epi_mask(first_echo_img)
     else:
         LGR.info("Using user-defined mask")
+
+    # Create mask for volumes to use based on exclude indices
+    if n_exclude > 0 and np.max(exclude_idx) > n_vols:
+        raise ValueError(
+            f"The maximum exclude index ({np.max(exclude_idx)}) is greater than the number of "
+            f"timepoints in the data ({n_vols})."
+        )
+    elif n_exclude > 0:
+        LGR.info(f"Excluding {n_exclude} volumes from adaptive mask and T2*/S0 estimation")
+        use_volumes = np.ones(n_vols, dtype=bool)
+        use_volumes[exclude_idx] = False
+        data_without_excluded_vols = data_cat[:, :, use_volumes]
+    else:
+        data_without_excluded_vols = data_cat
+
     mask, masksum = utils.make_adaptive_mask(
-        catd,
+        data_without_excluded_vols,
         mask=mask,
+        n_independent_echos=n_independent_echos,
         threshold=1,
         methods=masktype,
     )
+    data_without_excluded_vols_masked = data_without_excluded_vols[mask, ...]
+    masksum_masked = masksum[mask]
 
     LGR.info("Computing adaptive T2* map")
-    if fitmode == "all":
-        (t2s_limited, s0_limited, t2s_full, s0_full) = decay.fit_decay(
-            catd, tes, mask, masksum, fittype
-        )
-    else:
-        (t2s_limited, s0_limited, t2s_full, s0_full) = decay.fit_decay_ts(
-            catd, tes, mask, masksum, fittype
-        )
+    decay_function = decay.fit_decay if fitmode == "all" else decay.fit_decay_ts
+    t2s_full, s0_full, failures, t2s_var, s0_var, t2s_s0_covar = decay_function(
+        data=data_without_excluded_vols_masked,
+        tes=tes,
+        adaptive_mask=masksum_masked,
+        fittype=fittype,
+        n_threads=n_threads,
+    )
+    del data_without_excluded_vols_masked
 
-    # set a hard cap for the T2* map/timeseries
-    # anything that is 10x higher than the 99.5 %ile will be reset to 99.5 %ile
-    cap_t2s = stats.scoreatpercentile(t2s_full.flatten(), 99.5, interpolation_method="lower")
-    cap_t2s_sec = utils.millisec2sec(cap_t2s * 10.0)
-    LGR.debug(f"Setting cap on T2* map at {cap_t2s_sec:.5f}s")
-    t2s_full[t2s_full > cap_t2s * 10] = cap_t2s
+    if fittype == "curvefit":
+        io_generator.save_file(utils.unmask(failures, mask).astype(np.uint8), "fit failures img")
+        if verbose:
+            io_generator.save_file(utils.unmask(t2s_var, mask), "t2star variance img")
+            io_generator.save_file(utils.unmask(s0_var, mask), "s0 variance img")
+            io_generator.save_file(utils.unmask(t2s_s0_covar, mask), "t2star-s0 covariance img")
+
+    # Delete unused variables
+    del data_without_excluded_vols, failures, t2s_var, s0_var, t2s_s0_covar
+
+    t2s_full, s0_full, t2s_limited, s0_limited = decay.modify_t2s_s0_maps(
+        t2s=t2s_full,
+        s0=s0_full,
+        adaptive_mask=masksum_masked,
+        tes=tes,
+    )
+    del masksum_masked
+
+    t2s_full = utils.unmask(t2s_full, mask)
+    s0_full = utils.unmask(s0_full, mask)
+    t2s_limited = utils.unmask(t2s_limited, mask)
+    s0_limited = utils.unmask(s0_limited, mask)
+
+    io_generator.save_file(s0_full, "s0 img")
+    del s0_full
+
+    LGR.info("Calculating model fit quality metrics")
+    rmse_map, rmse_df = decay.rmse_of_fit_decay_ts(
+        data=data_cat,
+        tes=tes,
+        adaptive_mask=masksum,
+        t2s=t2s_limited,
+        s0=s0_limited,
+        fitmode=fitmode,
+    )
+    io_generator.save_file(rmse_map, "rmse img")
+    io_generator.save_file(rmse_df, "confounds tsv")
+    io_generator.save_file(
+        s0_limited,
+        "limited s0 img",
+    )
+    del s0_limited
+    io_generator.save_file(
+        utils.millisec2sec(t2s_limited),
+        "limited t2star img",
+    )
+    del t2s_limited
 
     LGR.info("Computing optimal combination")
-    # optimally combine data
-    data_oc = combine.make_optcom(catd, tes, masksum, t2s=t2s_full, combmode=combmode)
-
-    # clean up numerical errors
-    for arr in (data_oc, s0_full, t2s_full):
-        np.nan_to_num(arr, copy=False)
-
-    s0_full[s0_full < 0] = 0
-    t2s_full[t2s_full < 0] = 0
+    # optimally combine data, including the ignored volumes
+    data_optcom = combine.make_optcom(data_cat, tes, masksum, t2s=t2s_full, combmode=combmode)
 
     io_generator.save_file(
         utils.millisec2sec(t2s_full),
         "t2star img",
     )
-    io_generator.save_file(s0_full, "s0 img")
-    io_generator.save_file(
-        utils.millisec2sec(t2s_limited),
-        "limited t2star img",
-    )
-    io_generator.save_file(
-        s0_limited,
-        "limited s0 img",
-    )
-    io_generator.save_file(data_oc, "combined img")
+    io_generator.save_file(data_optcom, "combined img")
 
     # Write out BIDS-compatible description file
     derivative_metadata = {
@@ -379,6 +530,10 @@ def t2smap_workflow(
     io_generator.save_self()
 
     LGR.info("Workflow completed")
+
+    # Add newsletter info to the log
+    utils.log_newsletter_info()
+
     utils.teardown_loggers()
 
 
@@ -391,7 +546,7 @@ def _main(argv=None):
         t2smap_command = "t2smap " + " ".join(sys.argv[1:])
     options = _get_parser().parse_args(argv)
     kwargs = vars(options)
-    n_threads = kwargs.pop("n_threads")
+    n_threads = kwargs.get("n_threads", 1)
     n_threads = None if n_threads == -1 else n_threads
     with threadpool_limits(limits=n_threads, user_api=None):
         t2smap_workflow(**kwargs, t2smap_command=t2smap_command)

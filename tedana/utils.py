@@ -5,22 +5,27 @@ import os.path as op
 import platform
 import sys
 import warnings
+from typing import Union
 
 import nibabel as nib
 import numpy as np
+import numpy.typing as npt
 from bokeh import __version__ as bokeh_version
 from mapca import __version__ as mapca_version
 from matplotlib import __version__ as matplotlib_version
 from nibabel import __version__ as nibabel_version
 from nilearn import __version__ as nilearn_version
-from nilearn._utils import check_niimg
+from nilearn._utils.niimg_conversions import check_niimg
 from numpy import __version__ as numpy_version
 from pandas import __version__ as pandas_version
+from robustica import __version__ as robustica_version
 from scipy import __version__ as scipy_version
 from scipy import ndimage
+from scipy.special import lpmv
 from sklearn import __version__ as sklearn_version
 from sklearn.utils import check_array
 from threadpoolctl import __version__ as threadpoolctl_version
+from tqdm import __version__ as tqdm_version
 
 LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
@@ -49,7 +54,7 @@ def reshape_niimg(data):
     return fdata
 
 
-def make_adaptive_mask(data, mask, threshold=1, methods=["dropout"]):
+def make_adaptive_mask(data, mask, n_independent_echos=None, threshold=1, methods=["dropout"]):
     """Make map of `data` specifying longest echo a voxel can be sampled with.
 
     Parameters
@@ -61,6 +66,10 @@ def make_adaptive_mask(data, mask, threshold=1, methods=["dropout"]):
         This must be provided, as the mask is used to identify exemplar voxels.
         Without a mask limiting the voxels to consider,
         the adaptive mask will generally select voxels outside the brain as exemplars.
+    n_independent_echos : :obj:`int`, optional
+        Number of independent echoes to use in goodness of fit metrics (fstat).
+        Primarily used for EPTI acquisitions.
+        If None, number of echoes will be used. Default is None.
     threshold : :obj:`int`, optional
         Minimum echo count to retain in the mask.
         Default is 1, which is equivalent to not thresholding.
@@ -173,13 +182,10 @@ def make_adaptive_mask(data, mask, threshold=1, methods=["dropout"]):
 
         # get 33rd %ile of `first_echo` and find corresponding index
         # NOTE: percentile is arbitrary
-        # TODO: "interpolation" param changed to "method" in numpy 1.22.0
-        #       confirm method="higher" is the same as interpolation="higher"
-        #       Current minimum version for numpy in tedana is 1.16 where
-        #       there is no "method" parameter. Either wait until we bump
-        #       our minimum numpy version to 1.22 or add a version check
-        #       or try/catch statement.
-        perc = np.percentile(first_echo, 33, interpolation="higher")
+        if np.lib.NumpyVersion(np.__version__) >= "1.22.0":
+            perc = np.percentile(first_echo, 33, method="higher")
+        else:
+            perc = np.percentile(first_echo, 33, interpolation="higher")
         perc_val = echo_means[:, 0] == perc
 
         # extract values from all echos at relevant index
@@ -225,8 +231,43 @@ def make_adaptive_mask(data, mask, threshold=1, methods=["dropout"]):
         )
         adaptive_mask[adaptive_mask < threshold] = 0
 
-    modified_mask = adaptive_mask.astype(bool)
+    if isinstance(n_independent_echos, int):
+        # For EPTI sequences, the way we use adaptive mask thresholding fails
+        # because sequential echoes have overlapping information and
+        # there is no clear mapping between the independent sources and the echoes.
+        # Since EPTI has less dropout, it is unclear how often this will cause issues.
+        # To track this, we are flagging voxels that might mark less independent signal.
+        # If such voxels appear often, this would show we might need to alter how the mask is used.
+        # The thresh where there might not be 3 independent sources of data within the good echoes
+        # For n_echos=100 & n_independent_echos=3, threshold_dof=66.
+        # For n_echos=100 & n_independent_echos=4, threshold_dof=50
+        threshold_3dof = np.floor(2 * n_echos / n_independent_echos)
+        n_3dof_voxels = np.sum(np.logical_and(adaptive_mask < threshold_3dof, adaptive_mask >= 1))
+        perc_3dof_voxels = 100 * n_3dof_voxels / np.sum(adaptive_mask >= 1)
+        if perc_3dof_voxels > 0:
+            LGR.warning(
+                f"{n_3dof_voxels} voxels ({np.round(perc_3dof_voxels, decimals=1)}%) have fewer "
+                f"than {np.round(threshold_3dof)} "
+                "good voxels. These voxels will be used in all analyses, "
+                "but might not include 3 independent echo measurements."
+            )
 
+        # There's a separate warning about DOF if it's possible there's a DOF reduction.
+        if n_independent_echos > 3:
+            # The threshold where the loss of good echoes might affect the DOF
+            # For n_echos=100 & n_independent_echos=4, threshold_dof=75
+            threshold_dof = np.floor((n_independent_echos - 1) * n_echos / n_independent_echos)
+            n_dof_voxels = np.sum(
+                np.logical_and(adaptive_mask < threshold_dof, adaptive_mask >= 1)
+            )
+            perc_dof_voxels = 100 * n_dof_voxels / np.sum(adaptive_mask >= 1)
+            LGR.warning(
+                f"{n_dof_voxels} voxels ({np.round(perc_dof_voxels, decimals=1)}%) have fewer "
+                f"than {np.round(threshold_dof)} good voxels. "
+                f"The degrees of freedom for fits across echoes will remain {n_independent_echos} "
+                f"even if there might be fewer independent echo measurements."
+            )
+    modified_mask = adaptive_mask.astype(bool)
     adaptive_mask = unmask(adaptive_mask, mask)
     modified_mask = unmask(modified_mask, mask)
 
@@ -455,6 +496,42 @@ def threshold_map(img, min_cluster_size, threshold=None, mask=None, binarize=Tru
     return clust_thresholded
 
 
+def create_legendre_polynomial_basis_set(
+    n_vols: int, dtrank: Union[int, None] = None
+) -> npt.NDArray:
+    """
+    Create Legendre polynomial basis set for detrending time series.
+
+    Parameters
+    ----------
+    n_vols : :obj:`int`
+        The number of time points in the fMRI time series
+    dtrank : :obj:`int`, optional
+        Specifies degree of Legendre polynomial basis function for estimating
+        spatial global signal. Default: None
+        If None, then this is set to 1+floor(n_vols/150)
+
+    Returns
+    -------
+    legendre_arr : (T X R) :obj:`np.ndarray`
+        A time by rank matrix of the first dtrank order Legendre polynomials.
+        These include:
+        Order 0: y = 1
+        Order 1: y = x
+        Order 2: y = 0.5*(3*x^2 - 1)
+        Order 3: y = 0.5*(5*x^3 - 3*x)
+        Order 4: y = 0.125*(35*x^4 - 30*x^2 + 3)
+        Order 5: y = 0.125*(63*x^5 - 70*x^3 + 15x)
+    """
+    if dtrank is None:
+        dtrank = int(1 + np.floor(n_vols / 150))
+
+    bounds = np.linspace(-1, 1, n_vols)
+    legendre_arr = np.column_stack([lpmv(0, vv, bounds) for vv in range(dtrank)])
+
+    return legendre_arr
+
+
 def sec2millisec(arr):
     """
     Convert seconds to milliseconds.
@@ -487,6 +564,93 @@ def millisec2sec(arr):
         Values in seconds.
     """
     return arr / 1000.0
+
+
+def check_t2s_values(t2s_map):
+    """Check and convert T2* map values to milliseconds.
+
+    This function checks if a precalculated T2* map is in seconds (expected
+    per BIDS convention) or milliseconds. Typical brain T2* values at 3T are
+    approximately 0.015-0.070 seconds (15-70 ms).
+
+    Parameters
+    ----------
+    t2s_map : array_like
+        T2* map values to check. Expected to be in seconds per BIDS convention.
+
+    Returns
+    -------
+    array_like
+        T2* map values converted to milliseconds for internal use.
+
+    Raises
+    ------
+    ValueError
+        If T2* values appear to be in unexpected units.
+
+    Notes
+    -----
+    The heuristic used is:
+    - If median non-zero T2* < 1: values are assumed to be in seconds (correct
+      per BIDS), converted to milliseconds and returned
+    - If median non-zero T2* >= 1 and < 1000: values are assumed to be in
+      milliseconds already, a warning is logged, and values are returned as-is
+    - If median non-zero T2* >= 1000: values are considered invalid
+
+    This function is designed to handle the common case where users provide
+    T2* maps in milliseconds rather than seconds, which can cause severely
+    biased optimal combination weighting.
+    """
+    t2s_map = np.asarray(t2s_map)
+
+    # Get non-zero values for checking
+    nonzero_mask = t2s_map != 0
+    if not np.any(nonzero_mask):
+        LGR.warning("T2* map contains only zeros.")
+        return t2s_map
+
+    nonzero_values = t2s_map[nonzero_mask]
+
+    # Check for negative values
+    if np.any(nonzero_values < 0):
+        LGR.warning(
+            "T2* map contains negative values. These will be set to zero during processing."
+        )
+
+    # Use median of positive values for unit detection
+    positive_values = nonzero_values[nonzero_values > 0]
+    if len(positive_values) == 0:
+        LGR.warning("T2* map contains no positive values.")
+        return t2s_map
+
+    median_t2s = np.median(positive_values)
+
+    # Typical T2* values at 3T: 0.015-0.070 seconds (15-70 ms)
+    # At 1.5T values can be higher (~0.08-0.1 s), at 7T lower (~0.01-0.03 s)
+    # Use 1 second as threshold - brain T2* should never be >= 1 second
+    if median_t2s < 1:
+        # Values appear to be in seconds (expected per BIDS)
+        LGR.info(
+            f"T2* map values appear to be in seconds (median={median_t2s:.4f}s). "
+            "Converting to milliseconds for internal use."
+        )
+        return sec2millisec(t2s_map)
+    elif median_t2s < 1000:
+        # Values appear to be in milliseconds already
+        LGR.warning(
+            f"T2* map median value is {median_t2s:.2f}, which suggests values are in "
+            "milliseconds rather than seconds. Per BIDS convention, T2* maps should be "
+            "in seconds. The map will be used as-is (in milliseconds), but please consider "
+            "providing T2* maps in seconds in the future for consistency with BIDS."
+        )
+        return t2s_map
+    else:
+        # Values are unexpectedly large
+        raise ValueError(
+            f"T2* map median value is {median_t2s:.2f}, which is outside the expected range. "
+            "T2* maps should be in seconds (typical values: 0.01-0.1s per BIDS convention) "
+            "or milliseconds (typical values: 10-100ms). Please check your T2* map units."
+        )
 
 
 def setup_loggers(logname=None, repname=None, quiet=False, debug=False):
@@ -576,9 +740,11 @@ def get_system_version_info():
         "nilearn": nilearn_version,
         "numpy": numpy_version,
         "pandas": pandas_version,
+        "robustica": robustica_version,
         "scikit-learn": sklearn_version,
         "scipy": scipy_version,
         "threadpoolctl": threadpoolctl_version,
+        "tqdm": tqdm_version,
     }
 
     return {
@@ -591,3 +757,136 @@ def get_system_version_info():
         "Python": sys.version,
         "Python_Libraries": python_libraries,
     }
+
+
+def check_te_values(te_values):
+    """Check and convert TE values to milliseconds for internal use.
+
+    This function checks if TE values are provided in seconds (preferred per
+    BIDS convention) or milliseconds. Echo times are converted to milliseconds
+    for internal processing.
+
+    Parameters
+    ----------
+    te_values : list
+        TE values to check. Per BIDS convention, these should be in seconds.
+
+    Returns
+    -------
+    list
+        TE values in milliseconds for internal use.
+
+    Raises
+    ------
+    ValueError
+        If TE values are not positive or appear to be in unexpected units.
+
+    Notes
+    -----
+    The heuristic used is:
+    - If all TE values are between 0 and 1: values are assumed to be in seconds
+      (correct per BIDS), converted to milliseconds and returned
+    - If all TE values are >= 1: values are assumed to be in milliseconds, a
+      deprecation warning is logged, and values are returned as-is
+    - Mixed values or negative values raise an error
+    """
+    te_values = np.array(te_values)
+    if all((te_values > 0) & (te_values < 1)):
+        # Values appear to be in seconds (expected per BIDS)
+        LGR.info("TE values appear to be in seconds. Converting to milliseconds for internal use.")
+        return (te_values * 1000).tolist()
+    elif all(te_values >= 1):
+        # Values appear to be in milliseconds (deprecated)
+        LGR.warning(
+            "TE values appear to be in milliseconds. Per BIDS convention, echo times should "
+            "be provided in seconds. Support for millisecond TE values is deprecated and will "
+            "be removed in a future version. Please provide TE values in seconds."
+        )
+        return te_values.tolist()
+    else:
+        raise ValueError(
+            "TE values must be positive and either all in seconds (values < 1, preferred per "
+            "BIDS convention) or all in milliseconds (values >= 1, deprecated)."
+        )
+
+
+def log_newsletter_info():
+    """Log information about the tedana newsletter."""
+    # Add log encouraging users to subscribe to the tedana newsletter
+    LGR.info(
+        "Don't forget to subscribe to the tedana newsletter for updates! "
+        "This is a very low volume email list."
+    )
+    LGR.info("https://groups.google.com/g/tedana-newsletter")
+
+
+def parse_volume_indices(indices_str):
+    """Parse volume indices string into a list of integers.
+
+    As in Python lists, ranges are start-inclusive and end-exclusive
+    (for example, '0:5' includes the first [0] through fifth [4] timepoints).
+
+    Supports:
+    - None: None
+    - Individual indices: '0,5,10'
+    - Ranges: '0:5'
+    - Mixed: '0,5:10,15,20:25'
+
+    Does not support:
+    - Negative indices: '-1,-2,-3'
+    - Open-ended ranges: '0:' or ':5'
+    - Ranges with step size: '0:5:2' or '::2'
+
+    Parameters
+    ----------
+    indices_str : str
+        Comma-separated string of indices and ranges
+
+    Returns
+    -------
+    list of int
+        Sorted list of unique volume indices
+    """
+    if not indices_str:
+        return []
+
+    indices = set()
+    for item in indices_str.split(","):
+        item = item.strip()
+        if ":" in item:
+            # Handle range
+            parts = item.split(":")
+            if len(parts) > 2:
+                raise ValueError(
+                    f"Invalid volume indices string ({indices_str}). "
+                    "Step sizes are not supported."
+                )
+            elif parts[0] == "" or parts[1] == "":
+                raise ValueError(
+                    f"Invalid volume indices string ({indices_str}). "
+                    "Open-ended ranges are not supported."
+                )
+
+            start, end = int(parts[0]), int(parts[1])
+
+            # Check for negative indices
+            if start < 0 or end < 0:
+                raise ValueError(
+                    f"Invalid volume indices string ({indices_str}). "
+                    "Negative indices are not supported."
+                )
+
+            # Range is end-exclusive (like Python lists)
+            indices.update(range(start, end))
+        else:
+            # Handle single index
+            index = int(item)
+            # Check for negative indices
+            if index < 0:
+                raise ValueError(
+                    f"Invalid volume indices string ({indices_str}). "
+                    "Negative indices are not supported."
+                )
+            indices.add(index)
+
+    return sorted(indices)

@@ -1,18 +1,25 @@
 """Metrics evaluating component TE-dependence or -independence."""
 
 import logging
+import typing
 
+import nibabel as nb
 import numpy as np
 from scipy import stats
 
 from tedana import io, utils
-from tedana.stats import computefeats2, get_coeffs, t_to_z
+from tedana.metrics._utils import get_value_thresholds
+from tedana.stats import get_coeffs, t_to_z
 
 LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
 
 
-def calculate_weights(data_optcom, mixing):
+def calculate_weights(
+    *,
+    data_optcom: np.ndarray,
+    mixing: np.ndarray,
+) -> np.ndarray:
     """Calculate standardized parameter estimates between data and mixing matrix.
 
     Parameters
@@ -29,44 +36,53 @@ def calculate_weights(data_optcom, mixing):
         the mixing matrix.
     """
     assert data_optcom.shape[1] == mixing.shape[0]
-    mixing_z = stats.zscore(mixing, axis=0)
-    # compute un-normalized weight dataset (features)
-    weights = computefeats2(data_optcom, mixing_z, normalize=False)
+    mixing = stats.zscore(mixing, axis=0)
+    data_optcom = stats.zscore(data_optcom, axis=-1)
+    # compute standardized parameter estimates
+    weights = get_coeffs(data_optcom, mixing)
     return weights
 
 
-def calculate_betas(data, mixing):
+def calculate_betas(
+    *,
+    data: np.ndarray,
+    mixing: np.ndarray,
+) -> np.ndarray:
     """Calculate unstandardized parameter estimates between data and mixing matrix.
 
     Parameters
     ----------
-    data : (M x [E] x T) array_like
+    data : (M [x E] x T) array_like
         Data to calculate betas for
     mixing : (T x C) array_like
         Mixing matrix
 
     Returns
     -------
-    betas : (M x [E] x C) array_like
+    betas : (M [x E] x C) array_like
         Unstandardized parameter estimates
     """
-    if len(data.shape) == 2:
+    if data.ndim == 2:
         data_optcom = data
         assert data_optcom.shape[1] == mixing.shape[0]
         # mean-center optimally-combined data
         data_optcom_dm = data_optcom - data_optcom.mean(axis=-1, keepdims=True)
-        # betas are the result of a normal OLS fit of the mixing matrix
-        # against the mean-center data
+        # betas are from a normal OLS fit of the mixing matrix against the mean-centered data
         betas = get_coeffs(data_optcom_dm, mixing)
-        return betas
+
     else:
         betas = np.zeros([data.shape[0], data.shape[1], mixing.shape[1]])
         for n_echo in range(data.shape[1]):
             betas[:, n_echo, :] = get_coeffs(data[:, n_echo, :], mixing)
-        return betas
+
+    return betas
 
 
-def calculate_psc(data_optcom, optcom_betas):
+def calculate_psc(
+    *,
+    data_optcom: np.ndarray,
+    optcom_betas: np.ndarray,
+) -> np.ndarray:
     """Calculate percent signal change maps for components against optimally-combined data.
 
     Parameters
@@ -87,7 +103,11 @@ def calculate_psc(data_optcom, optcom_betas):
     return psc
 
 
-def calculate_z_maps(weights, z_max=8):
+def calculate_z_maps(
+    *,
+    weights: np.ndarray,
+    z_max: float = 8,
+) -> np.ndarray:
     """Calculate component-wise z-statistic maps.
 
     This is done by z-scoring standardized parameter estimate maps and cropping extreme values.
@@ -111,15 +131,21 @@ def calculate_z_maps(weights, z_max=8):
     return z_maps
 
 
-def calculate_f_maps(data_cat, z_maps, mixing, adaptive_mask, tes, f_max=500):
+def calculate_f_maps(
+    *,
+    data_cat: np.ndarray,
+    mixing: np.ndarray,
+    adaptive_mask: np.ndarray,
+    tes: np.ndarray,
+    n_independent_echos=None,
+    f_max: float = 500,
+) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Calculate pseudo-F-statistic maps for TE-dependence and -independence models.
 
     Parameters
     ----------
     data_cat : (M x E x T) array_like
         Multi-echo data, already masked.
-    z_maps : (M x C) array_like
-        Z-statistic maps for components, reflecting voxel-wise component loadings.
     mixing : (T x C) array_like
         Mixing matrix
     adaptive_mask : (M) array_like
@@ -127,6 +153,10 @@ def calculate_f_maps(data_cat, z_maps, mixing, adaptive_mask, tes, f_max=500):
         "good signal". Limited to masked voxels.
     tes : (E) array_like
         Echo times in milliseconds, in the same order as the echoes in data_cat.
+    n_independent_echos : int
+        Number of independent echoes to use in goodness of fit metrics (fstat).
+        Primarily used for EPTI acquisitions.
+        If None, number of echoes will be used. Default is None.
     f_max : float, optional
         Maximum F-statistic, used to crop extreme values. Values in the
         F-statistic maps greater than this value are set to it.
@@ -137,10 +167,9 @@ def calculate_f_maps(data_cat, z_maps, mixing, adaptive_mask, tes, f_max=500):
         Pseudo-F-statistic maps for TE-dependence and -independence models,
         respectively.
     """
-    assert data_cat.shape[0] == z_maps.shape[0] == adaptive_mask.shape[0]
+    assert data_cat.shape[0] == adaptive_mask.shape[0]
     assert data_cat.shape[1] == tes.shape[0]
     assert data_cat.shape[2] == mixing.shape[0]
-    assert z_maps.shape[1] == mixing.shape[1]
 
     # TODO: Remove mask arg from get_coeffs
     me_betas = get_coeffs(data_cat, mixing, mask=np.ones(data_cat.shape[:2], bool), add_const=True)
@@ -175,7 +204,10 @@ def calculate_f_maps(data_cat, z_maps, mixing, adaptive_mask, tes, f_max=500):
             pred_s0 = x1[:j_echo, :] * np.tile(coeffs_s0, (j_echo, 1))
             sse_s0 = (comp_betas[:j_echo] - pred_s0) ** 2
             sse_s0 = sse_s0.sum(axis=0)  # (S,) prediction error map
-            f_s0 = (alpha - sse_s0) * (j_echo - 1) / (sse_s0)
+            if n_independent_echos is None or n_independent_echos >= j_echo:
+                f_s0 = (alpha - sse_s0) * (j_echo - 1) / (sse_s0)
+            else:
+                f_s0 = (alpha - sse_s0) * (n_independent_echos - 1) / (sse_s0)
             f_s0[f_s0 > f_max] = f_max
             f_s0_maps[mask_idx, i_comp] = f_s0[mask_idx]
 
@@ -186,7 +218,10 @@ def calculate_f_maps(data_cat, z_maps, mixing, adaptive_mask, tes, f_max=500):
             pred_t2 = x2[:j_echo] * np.tile(coeffs_t2, (j_echo, 1))
             sse_t2 = (comp_betas[:j_echo] - pred_t2) ** 2
             sse_t2 = sse_t2.sum(axis=0)
-            f_t2 = (alpha - sse_t2) * (j_echo - 1) / (sse_t2)
+            if n_independent_echos is None or n_independent_echos >= j_echo:
+                f_t2 = (alpha - sse_t2) * (j_echo - 1) / (sse_t2)
+            else:
+                f_t2 = (alpha - sse_t2) * (n_independent_echos - 1) / (sse_t2)
             f_t2[f_t2 > f_max] = f_max
             f_t2_maps[mask_idx, i_comp] = f_t2[mask_idx]
 
@@ -196,7 +231,15 @@ def calculate_f_maps(data_cat, z_maps, mixing, adaptive_mask, tes, f_max=500):
     return f_t2_maps, f_s0_maps, pred_t2_maps, pred_s0_maps
 
 
-def threshold_map(maps, mask, ref_img, threshold, csize=None):
+def threshold_map(
+    *,
+    maps: np.ndarray,
+    mask: np.ndarray,
+    ref_img: nb.Nifti1Image,
+    proportion_threshold: float = None,
+    value_threshold: float = None,
+    csize: typing.Union[int, None] = None,
+) -> np.ndarray:
     """Perform cluster-extent thresholding.
 
     Parameters
@@ -207,8 +250,10 @@ def threshold_map(maps, mask, ref_img, threshold, csize=None):
         Binary mask.
     ref_img : img_like
         Reference image to convert to niimgs with.
-    threshold : :obj:`float`
-        Value threshold to apply to maps.
+    proportion_threshold : :obj:`float`
+        Proportion threshold to apply to maps. Values between 0 and 100.
+    value_threshold : float, optional
+        Value threshold to apply to maps. Default is None.
     csize : :obj:`int` or :obj:`None`, optional
         Minimum cluster size. If None, standard thresholding (non-cluster-extent) will be done.
         Default is None.
@@ -224,17 +269,34 @@ def threshold_map(maps, mask, ref_img, threshold, csize=None):
     else:
         csize = int(csize)
 
+    value_threshold = get_value_thresholds(
+        maps=maps,
+        proportion_threshold=proportion_threshold,
+        value_threshold=value_threshold,
+    )
+
     for i_comp in range(n_components):
         # Cluster-extent threshold and binarize F-maps
         ccimg = io.new_nii_like(ref_img, np.squeeze(utils.unmask(maps[:, i_comp], mask)))
 
         maps_thresh[:, i_comp] = utils.threshold_map(
-            ccimg, min_cluster_size=csize, threshold=threshold, mask=mask, binarize=True
+            ccimg,
+            min_cluster_size=csize,
+            threshold=value_threshold[i_comp],
+            mask=mask,
+            binarize=True,
         )
     return maps_thresh
 
 
-def threshold_to_match(maps, n_sig_voxels, mask, ref_img, csize=None):
+def threshold_to_match(
+    *,
+    maps: np.ndarray,
+    n_sig_voxels: np.ndarray,
+    mask: np.ndarray,
+    ref_img: nb.Nifti1Image,
+    csize: typing.Union[int, None] = None,
+) -> np.ndarray:
     """Cluster-extent threshold a map to target number of significant voxels.
 
     Resulting maps have roughly the requested number of significant voxels, after cluster-extent
@@ -306,7 +368,12 @@ def threshold_to_match(maps, n_sig_voxels, mask, ref_img, csize=None):
     return clmaps
 
 
-def calculate_dependence_metrics(f_t2_maps, f_s0_maps, z_maps):
+def calculate_dependence_metrics(
+    *,
+    f_t2_maps: np.ndarray,
+    f_s0_maps: np.ndarray,
+    z_maps: np.ndarray,
+) -> typing.Tuple[np.ndarray, np.ndarray]:
     """Calculate Kappa and Rho metrics from F-statistic maps.
 
     Just a weighted average over voxels.
@@ -341,44 +408,34 @@ def calculate_dependence_metrics(f_t2_maps, f_s0_maps, z_maps):
     return kappas, rhos
 
 
-def calculate_varex(optcom_betas):
-    """Calculate unnormalized(?) variance explained from unstandardized parameter estimate maps.
+def calculate_varex(
+    *,
+    component_maps: np.ndarray,
+) -> np.ndarray:
+    """Calculate variance explained from parameter estimate maps.
 
     Parameters
     ----------
-    optcom_betas : (S x C) array_like
-        Component-wise, unstandardized parameter estimates from the regression
+    component_maps : (S x C) array_like
+        Component-wise parameter estimates from the regression
         of the optimally combined data against component time series.
 
     Returns
     -------
     varex : (C) array_like
-        Unnormalized variance explained for each component.
+        Variance explained for each component, on a scale from 0 to 100.
     """
-    compvar = (optcom_betas**2).sum(axis=0)
+    compvar = (component_maps**2).sum(axis=0)
     varex = 100 * (compvar / compvar.sum())
     return varex
 
 
-def calculate_varex_norm(weights):
-    """Calculate normalized variance explained from standardized parameter estimate maps.
-
-    Parameters
-    ----------
-    weights : (S x C) array_like
-        Standardized parameter estimate maps for components.
-
-    Returns
-    -------
-    varex_norm : (C) array_like
-        Normalized variance explained scaled from 0 to 1.
-    """
-    compvar = (weights**2).sum(axis=0)
-    varex_norm = compvar / compvar.sum()
-    return varex_norm
-
-
-def compute_dice(clmaps1, clmaps2, axis=0):
+def compute_dice(
+    *,
+    clmaps1: np.ndarray,
+    clmaps2: np.ndarray,
+    axis: typing.Union[int, None] = 0,
+) -> np.ndarray:
     """Compute the Dice similarity index between two thresholded and binarized maps.
 
     NaNs are converted automatically to zeroes.
@@ -402,7 +459,14 @@ def compute_dice(clmaps1, clmaps2, axis=0):
     return dice_values
 
 
-def compute_signal_minus_noise_z(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
+def compute_signal_minus_noise_z(
+    *,
+    z_maps: np.ndarray,
+    z_clmaps: np.ndarray,
+    f_t2_maps: np.ndarray,
+    value_threshold: float = None,
+    proportion_threshold: float = None,
+) -> typing.Tuple[np.ndarray, np.ndarray]:
     """Compare signal and noise z-statistic distributions with a two-sample t-test.
 
     Divide voxel-level thresholded F-statistic maps into distributions of
@@ -421,8 +485,12 @@ def compute_signal_minus_noise_z(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
         Pseudo-F-statistic maps for components from TE-dependence models.
         Each voxel reflects the model fit for the component weights to the
         TE-dependence model across echoes.
-    z_thresh : float, optional
-        Z-statistic threshold for voxel-wise significance. Default is 1.95.
+    value_threshold : float, optional
+        Threshold for voxel-wise significance in input ``z_maps``. Default is None.
+    proportion_threshold : float, optional
+        Proportion threshold for voxel-wise significance in input ``z_maps``.
+        Values between 0 and 100.
+        Default is None.
 
     Returns
     -------
@@ -433,10 +501,16 @@ def compute_signal_minus_noise_z(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
     """
     assert z_maps.shape == z_clmaps.shape == f_t2_maps.shape
 
+    value_threshold = get_value_thresholds(
+        maps=z_maps,
+        proportion_threshold=proportion_threshold,
+        value_threshold=value_threshold,
+    )
+
     n_components = z_maps.shape[1]
     signal_minus_noise_z = np.zeros(n_components)
     signal_minus_noise_p = np.zeros(n_components)
-    noise_idx = (np.abs(z_maps) > z_thresh) & (z_clmaps == 0)
+    noise_idx = (np.abs(z_maps) > value_threshold) & (z_clmaps == 0)
     countnoise = noise_idx.sum(axis=0)
     countsignal = z_clmaps.sum(axis=0)
     for i_comp in range(n_components):
@@ -464,7 +538,14 @@ def compute_signal_minus_noise_z(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
     return signal_minus_noise_z, signal_minus_noise_p
 
 
-def compute_signal_minus_noise_t(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
+def compute_signal_minus_noise_t(
+    *,
+    z_maps: np.ndarray,
+    z_clmaps: np.ndarray,
+    f_t2_maps: np.ndarray,
+    value_threshold: float = None,
+    proportion_threshold: float = None,
+) -> typing.Tuple[np.ndarray, np.ndarray]:
     """Compare signal and noise t-statistic distributions with a two-sample t-test.
 
     Divide voxel-level thresholded F-statistic maps into distributions of
@@ -482,8 +563,12 @@ def compute_signal_minus_noise_t(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
         Pseudo-F-statistic maps for components from TE-dependence models.
         Each voxel reflects the model fit for the component weights to the
         TE-dependence model across echoes.
-    z_thresh : float, optional
-        Z-statistic threshold for voxel-wise significance. Default is 1.95.
+    value_threshold : float, optional
+        Threshold for voxel-wise significance in input ``z_maps``. Default is None.
+    proportion_threshold : float, optional
+        Proportion threshold for voxel-wise significance in input ``z_maps``.
+        Values between 0 and 100.
+        Default is None.
 
     Returns
     -------
@@ -494,10 +579,16 @@ def compute_signal_minus_noise_t(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
     """
     assert z_maps.shape == z_clmaps.shape == f_t2_maps.shape
 
+    value_threshold = get_value_thresholds(
+        maps=z_maps,
+        proportion_threshold=proportion_threshold,
+        value_threshold=value_threshold,
+    )
+
     n_components = z_maps.shape[1]
     signal_minus_noise_t = np.zeros(n_components)
     signal_minus_noise_p = np.zeros(n_components)
-    noise_idx = (np.abs(z_maps) > z_thresh) & (z_clmaps == 0)
+    noise_idx = (np.abs(z_maps) > value_threshold) & (z_clmaps == 0)
     for i_comp in range(n_components):
         # NOTE: Why only compare distributions of *unique* F-statistics?
         noise_ft2_z = np.log10(np.unique(f_t2_maps[noise_idx[:, i_comp], i_comp]))
@@ -511,7 +602,10 @@ def compute_signal_minus_noise_t(z_maps, z_clmaps, f_t2_maps, z_thresh=1.95):
     return signal_minus_noise_t, signal_minus_noise_p
 
 
-def compute_countsignal(stat_cl_maps):
+def compute_countsignal(
+    *,
+    stat_cl_maps: np.ndarray,
+) -> np.ndarray:
     """Count the number of significant voxels in a set of cluster-extent thresholded maps.
 
     Parameters
@@ -528,7 +622,13 @@ def compute_countsignal(stat_cl_maps):
     return countsignal
 
 
-def compute_countnoise(stat_maps, stat_cl_maps, stat_thresh=1.95):
+def compute_countnoise(
+    *,
+    stat_maps: np.ndarray,
+    stat_cl_maps: np.ndarray,
+    value_threshold: float = None,
+    proportion_threshold: float = None,
+) -> np.ndarray:
     """Count the number of significant voxels from non-significant clusters.
 
     This is done after application of a cluster-defining threshold, but compared against results
@@ -540,9 +640,12 @@ def compute_countnoise(stat_maps, stat_cl_maps, stat_thresh=1.95):
         Unthresholded statistical maps.
     stat_cl_maps : (S x C) array_like
         Cluster-extent thresholded and binarized version of stat_maps.
-    stat_thresh : float, optional
-        Statistical threshold. Default is 1.95 (Z-statistic threshold
-        corresponding to p<X one-sided).
+    value_threshold : float, optional
+        Threshold for voxel-wise significance in input ``stat_maps``. Default is None.
+    proportion_threshold : float, optional
+        Proportion threshold for voxel-wise significance in input ``stat_maps``.
+        Values between 0 and 100.
+        Default is None.
 
     Returns
     -------
@@ -550,13 +653,25 @@ def compute_countnoise(stat_maps, stat_cl_maps, stat_thresh=1.95):
         Numbers of significant non-cluster voxels from the statistical maps.
     """
     assert stat_maps.shape == stat_cl_maps.shape
+    value_threshold = get_value_thresholds(
+        maps=stat_maps,
+        proportion_threshold=proportion_threshold,
+        value_threshold=value_threshold,
+    )
 
-    noise_idx = (np.abs(stat_maps) > stat_thresh) & (stat_cl_maps == 0)
+    noise_idx = (np.abs(stat_maps) > value_threshold) & (stat_cl_maps == 0)
     countnoise = noise_idx.sum(axis=0)
     return countnoise
 
 
-def generate_decision_table_score(kappa, dice_ft2, signal_minus_noise_t, countnoise, countsig_ft2):
+def generate_decision_table_score(
+    *,
+    kappa: np.ndarray,
+    dice_ft2: np.ndarray,
+    signal_minus_noise_t: np.ndarray,
+    countnoise: np.ndarray,
+    countsig_ft2: np.ndarray,
+) -> np.ndarray:
     """Generate a five-metric decision table.
 
     Metrics are ranked in either descending or ascending order if they measure TE-dependence or
@@ -602,3 +717,25 @@ def generate_decision_table_score(kappa, dice_ft2, signal_minus_noise_t, countno
     ).T
     d_table_score = d_table_rank.mean(axis=1)
     return d_table_score
+
+
+def compute_kappa_rho_difference(*, kappa: np.ndarray, rho: np.ndarray) -> np.ndarray:
+    """Compute the proportion of pseudo-F-statistics that is dominated by either kappa or rho.
+
+    Parameters
+    ----------
+    kappa : (C) array_like
+        Kappa values.
+    rho : (C) array_like
+        Rho values.
+
+    Returns
+    -------
+    kappa_rho_difference : (C) array_like
+        Proportion of pseudo-F-statistics that is dominated by either kappa or rho.
+        Higher values indicate that either kappa or rho is dominating the component.
+        Lower values indicate that both kappa and rho are contributing to the component.
+    """
+    assert kappa.shape == rho.shape
+
+    return np.abs(kappa - rho) / (kappa + rho)

@@ -2,11 +2,13 @@
 
 import logging
 import os
+import warnings
 from io import BytesIO
 
 import matplotlib
 import nibabel as nb
 import numpy as np
+import pandas as pd
 
 matplotlib.use("AGG")
 import matplotlib.pyplot as plt
@@ -163,23 +165,24 @@ def carpet_plot(
             )
         )
 
-        mir_denoised_img = io_generator.get_name("ICA accepted mir denoised img")
-        fig, ax = plt.subplots(figsize=(14, 7))
-        plotting.plot_carpet(
-            mir_denoised_img,
-            mask_img,
-            figure=fig,
-            axes=ax,
-            title="High-Kappa Data (Post-MIR)",
-        )
-        fig.tight_layout()
-        fig.savefig(
-            os.path.join(
-                io_generator.out_dir,
-                "figures",
-                f"{io_generator.prefix}carpet_accepted_mir.svg",
+        if io_generator.verbose:
+            mir_denoised_img = io_generator.get_name("ICA accepted mir denoised img")
+            fig, ax = plt.subplots(figsize=(14, 7))
+            plotting.plot_carpet(
+                mir_denoised_img,
+                mask_img,
+                figure=fig,
+                axes=ax,
+                title="High-Kappa Data (Post-MIR)",
             )
-        )
+            fig.tight_layout()
+            fig.savefig(
+                os.path.join(
+                    io_generator.out_dir,
+                    "figures",
+                    f"{io_generator.prefix}carpet_accepted_mir.svg",
+                )
+            )
 
 
 def plot_component(
@@ -223,19 +226,26 @@ def plot_component(
     # Set range to ~1/10th of max positive or negative beta
     imgmax = 0.1 * np.max(np.abs(stat_img.get_fdata()))
 
-    # Save the figure to an in-memory file object
-    display = plotting.plot_stat_map(
-        stat_img,
-        bg_img=None,
-        display_mode="mosaic",
-        cut_coords=5,
-        vmax=imgmax,
-        cmap=png_cmap,
-        symmetric_cbar=True,
-        colorbar=False,
-        draw_cross=False,
-        annotate=False,
-    )
+    # nilearn raises a warning when creating a figure from an image with a non-diagonal affine.
+    # This is not relevant for how we use this function and it flood our screen
+    # output with repeated warnings so suppressing this warning.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="A non-diagonal affine.*", category=UserWarning)
+        # Save the figure to an in-memory file object
+        display = plotting.plot_stat_map(
+            stat_img,
+            bg_img=None,
+            display_mode="mosaic",
+            cut_coords=5,
+            vmax=imgmax,
+            cmap=png_cmap,
+            symmetric_cbar=True,
+            colorbar=False,
+            draw_cross=False,
+            annotate=False,
+            resampling_interpolation="nearest",
+        )
+
     display.annotate(size=30)
     example_ax = list(display.axes.values())[0]
     nilearn_fig = example_ax.ax.figure
@@ -310,7 +320,7 @@ def plot_component(
     plt.close(fig)
 
 
-def comp_figures(ts, mask, comptable, mmix, io_generator, png_cmap):
+def comp_figures(ts, mask, component_table, mixing, io_generator, png_cmap):
     """Create static figures that highlight certain aspects of tedana processing.
 
     This includes a figure for each component showing the component time course,
@@ -322,20 +332,17 @@ def comp_figures(ts, mask, comptable, mmix, io_generator, png_cmap):
         Time series from which to derive ICA betas
     mask : (S,) array_like
         Boolean mask array
-    comptable : (C x M) :obj:`pandas.DataFrame`
+    component_table : (C x M) :obj:`pandas.DataFrame`
         Component metric table. One row for each component, with a column for
         each metric. The index should be the component number.
-    mmix : (C x T) array_like
+    mixing : (C x T) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data`
     io_generator : :obj:`tedana.io.OutputGenerator`
         Output Generator object to use for this workflow
     """
-    # Flip signs of mixing matrix as needed
-    mmix = mmix * comptable["optimal sign"].values
-
     # regenerate the beta images
-    component_maps_arr = stats.get_coeffs(ts, mmix, mask)
+    component_maps_arr = stats.get_coeffs(ts, mixing, mask)
     component_maps_arr = component_maps_arr.reshape(
         io_generator.reference_img.shape[:3] + component_maps_arr.shape[1:],
     )
@@ -344,19 +351,25 @@ def comp_figures(ts, mask, comptable, mmix, io_generator, png_cmap):
     tr = io_generator.reference_img.header.get_zooms()[-1]
 
     # Remove trailing ';' from rationale column
-    # comptable["rationale"] = comptable["rationale"].str.rstrip(";")
-    for compnum in comptable.index.values:
-        if comptable.loc[compnum, "classification"] == "accepted":
+    # component_table["rationale"] = component_table["rationale"].str.rstrip(";")
+    for compnum in component_table.index.values:
+        if component_table.loc[compnum, "classification"] == "accepted":
             line_color = "g"
-            expl_text = "accepted reason(s): " + str(comptable.loc[compnum, "classification_tags"])
+            expl_text = "accepted reason(s): " + str(
+                component_table.loc[compnum, "classification_tags"]
+            )
 
-        elif comptable.loc[compnum, "classification"] == "rejected":
+        elif component_table.loc[compnum, "classification"] == "rejected":
             line_color = "r"
-            expl_text = "rejected reason(s): " + str(comptable.loc[compnum, "classification_tags"])
+            expl_text = "rejected reason(s): " + str(
+                component_table.loc[compnum, "classification_tags"]
+            )
 
-        elif comptable.loc[compnum, "classification"] == "ignored":
+        elif component_table.loc[compnum, "classification"] == "ignored":
             line_color = "k"
-            expl_text = "ignored reason(s): " + str(comptable.loc[compnum, "classification_tags"])
+            expl_text = "ignored reason(s): " + str(
+                component_table.loc[compnum, "classification_tags"]
+            )
 
         else:
             # Classification not added
@@ -364,10 +377,10 @@ def comp_figures(ts, mask, comptable, mmix, io_generator, png_cmap):
             line_color = "0.75"
             expl_text = "other classification"
 
-        # Title will include variance from comptable
-        comp_var = f"{comptable.loc[compnum, 'variance explained']:.2f}"
-        comp_kappa = f"{comptable.loc[compnum, 'kappa']:.2f}"
-        comp_rho = f"{comptable.loc[compnum, 'rho']:.2f}"
+        # Title will include variance from component_table
+        comp_var = f"{component_table.loc[compnum, 'variance explained']:.2f}"
+        comp_kappa = f"{component_table.loc[compnum, 'kappa']:.2f}"
+        comp_rho = f"{component_table.loc[compnum, 'rho']:.2f}"
 
         plt_title = (
             f"Comp. {compnum}: variance: {comp_var}%, kappa: {comp_kappa}, "
@@ -379,7 +392,7 @@ def comp_figures(ts, mask, comptable, mmix, io_generator, png_cmap):
             header=io_generator.reference_img.header,
         )
 
-        component_timeseries = mmix[:, compnum]
+        component_timeseries = mixing[:, compnum]
 
         # Get fft and freqs for this component
         # adapted from @dangom
@@ -559,7 +572,14 @@ def plot_t2star_and_s0(
     s0_img = io_generator.get_name("s0 img")
     mask_img = io.new_nii_like(io_generator.reference_img, mask.astype(int))
     assert os.path.isfile(t2star_img), f"File {t2star_img} does not exist"
-    assert os.path.isfile(s0_img), f"File {s0_img} does not exist"
+
+    # Check if S0 image exists, add message to log if not
+    s0_exists = os.path.isfile(s0_img)
+    if not s0_exists:
+        LGR.info(
+            "S0 maps and T2* fit metrics are not in report since a pre-existing "
+            "T2* map was provided"
+        )
 
     # Plot histograms
     t2star_data = masking.apply_mask(t2star_img, mask_img)
@@ -575,47 +595,148 @@ def plot_t2star_and_s0(
     fig.tight_layout()
     fig.savefig(os.path.join(io_generator.out_dir, "figures", t2star_histogram))
 
-    s0_data = masking.apply_mask(s0_img, mask_img)
-    s0_p02, s0_p98 = np.percentile(s0_data, [2, 98])
-    s0_histogram = f"{io_generator.prefix}s0_histogram.svg"
+    # Only plot S0 data if the file exists
+    if s0_exists:
+        s0_data = masking.apply_mask(s0_img, mask_img)
+        s0_p02, s0_p98 = np.percentile(s0_data, [2, 98])
+        s0_histogram = f"{io_generator.prefix}s0_histogram.svg"
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.hist(s0_data[s0_data <= s0_p98], bins=100)
-    ax.set_xlim(0, s0_p98)
-    ax.set_title("S0", fontsize=20)
-    ax.set_ylabel("Count", fontsize=16)
-    ax.set_xlabel("Arbitrary Units\n(limited to 98th percentile)", fontsize=16)
-    fig.tight_layout()
-    fig.savefig(os.path.join(io_generator.out_dir, "figures", s0_histogram))
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.hist(s0_data[s0_data <= s0_p98], bins=100)
+        ax.set_xlim(0, s0_p98)
+        ax.set_title("S0", fontsize=20)
+        ax.set_ylabel("Count", fontsize=16)
+        ax.set_xlabel("Arbitrary Units\n(limited to 98th percentile)", fontsize=16)
+        fig.tight_layout()
+        fig.savefig(os.path.join(io_generator.out_dir, "figures", s0_histogram))
 
     # Plot T2* and S0 maps
     t2star_plot = f"{io_generator.prefix}t2star_brain.svg"
-    plotting.plot_stat_map(
-        t2star_img,
-        bg_img=None,
-        display_mode="mosaic",
-        symmetric_cbar=False,
-        black_bg=True,
-        cmap="gray",
-        vmin=t2s_p02,
-        vmax=t2s_p98,
-        annotate=False,
-        output_file=os.path.join(io_generator.out_dir, "figures", t2star_plot),
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="A non-diagonal affine.*", category=UserWarning)
+        plotting.plot_stat_map(
+            t2star_img,
+            bg_img=None,
+            display_mode="mosaic",
+            symmetric_cbar=False,
+            black_bg=True,
+            cmap="gray",
+            vmin=t2s_p02,
+            vmax=t2s_p98,
+            annotate=False,
+            output_file=os.path.join(io_generator.out_dir, "figures", t2star_plot),
+            resampling_interpolation="nearest",
+        )
 
-    s0_plot = f"{io_generator.prefix}s0_brain.svg"
-    plotting.plot_stat_map(
-        s0_img,
-        bg_img=None,
-        display_mode="mosaic",
-        symmetric_cbar=False,
-        black_bg=True,
-        cmap="gray",
-        vmin=s0_p02,
-        vmax=s0_p98,
-        annotate=False,
-        output_file=os.path.join(io_generator.out_dir, "figures", s0_plot),
+    # Only plot S0 map if the file exists
+    if s0_exists:
+        s0_plot = f"{io_generator.prefix}s0_brain.svg"
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="A non-diagonal affine.*", category=UserWarning
+            )
+            plotting.plot_stat_map(
+                s0_img,
+                bg_img=None,
+                display_mode="mosaic",
+                symmetric_cbar=False,
+                black_bg=True,
+                cmap="gray",
+                vmin=s0_p02,
+                vmax=s0_p98,
+                annotate=False,
+                output_file=os.path.join(io_generator.out_dir, "figures", s0_plot),
+                resampling_interpolation="nearest",
+            )
+
+
+def plot_rmse(
+    *,
+    io_generator: io.OutputGenerator,
+    adaptive_mask: np.ndarray,
+):
+    """Plot the residual mean squared error map and time series for the monoexponential model fit.
+
+    Parameters
+    ----------
+    io_generator : :obj:`~tedana.io.OutputGenerator`
+        The output generator for this workflow.
+    adaptive_mask : (S,) :obj:`numpy.ndarray`
+        A mask where each value is the number of good echoes.
+        Since the T2* and S0 estimations require a minimum of 2 good echoes,
+        the outputted plots will only include mask values of at least 2.
+    """
+    import pandas as pd
+
+    rmse_img = io_generator.get_name("rmse img")
+    confounds_file = io_generator.get_name("confounds tsv")
+    # Mask that only includes values >=2 (i.e. at least 2 good echoes)
+    mask_img = io.new_nii_like(io_generator.reference_img, (adaptive_mask >= 2).astype(np.int32))
+
+    rmse_data = masking.apply_mask(rmse_img, mask_img)
+    rmse_p02, rmse_p98 = np.percentile(rmse_data, [2, 98])
+
+    # Get repetition time from reference image
+    tr = io_generator.reference_img.header.get_zooms()[-1]
+
+    # Load the confounds file
+    confounds_df = pd.read_table(confounds_file)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    rmse_arr = confounds_df["rmse_median"].values
+    p25_arr = confounds_df["rmse_percentile25"].values
+    p75_arr = confounds_df["rmse_percentile75"].values
+    p02_arr = confounds_df["rmse_percentile02"].values
+    p98_arr = confounds_df["rmse_percentile98"].values
+    time_arr = np.arange(confounds_df.shape[0]) * tr
+    ax.plot(time_arr, rmse_arr, color="black")
+    ax.fill_between(
+        time_arr,
+        p25_arr,
+        p75_arr,
+        color="blue",
+        alpha=0.2,
     )
+    ax.plot(time_arr, p02_arr, color="black", linestyle="dashed")
+    ax.plot(time_arr, p98_arr, color="black", linestyle="dashed")
+    ax.set_ylabel("RMSE", fontsize=16)
+    ax.set_xlabel(
+        "Time (s)",
+        fontsize=16,
+    )
+    ax.legend(["Median", "25th-75th percentiles", "2nd and 98th percentiles"])
+    ax.set_title("Root mean squared error of T2* and S0 fit across voxels", fontsize=20)
+    rmse_ts_plot = os.path.join(
+        io_generator.out_dir,
+        "figures",
+        f"{io_generator.prefix}rmse_timeseries.svg",
+    )
+    ax.set_xlim(0, time_arr[-2])
+    fig.savefig(rmse_ts_plot)
+    plt.close(fig)
+
+    # Plot RMSE
+    rmse_brain_plot = os.path.join(
+        io_generator.out_dir,
+        "figures",
+        f"{io_generator.prefix}rmse_brain.svg",
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="A non-diagonal affine.*", category=UserWarning)
+        plotting.plot_stat_map(
+            rmse_img,
+            bg_img=None,
+            display_mode="mosaic",
+            cut_coords=4,
+            symmetric_cbar=False,
+            black_bg=True,
+            cmap="Reds",
+            vmin=rmse_p02,
+            vmax=rmse_p98,
+            annotate=False,
+            output_file=rmse_brain_plot,
+            resampling_interpolation="nearest",
+        )
 
 
 def plot_adaptive_mask(
@@ -663,17 +784,19 @@ def plot_adaptive_mask(
         "Classification": discrete_cmap(0.9),
     }
 
-    ob = plotting.plot_prob_atlas(
-        maps_img=all_masks,
-        bg_img=mean_optcom_img,
-        view_type="contours",
-        threshold=0.2,
-        annotate=False,
-        draw_cross=False,
-        cmap=cmap,
-        display_mode="mosaic",
-        cut_coords=4,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="A non-diagonal affine.*", category=UserWarning)
+        ob = plotting.plot_prob_atlas(
+            maps_img=all_masks,
+            bg_img=mean_optcom_img,
+            view_type="contours",
+            threshold=0.2,
+            annotate=False,
+            draw_cross=False,
+            cmap=cmap,
+            display_mode="mosaic",
+            cut_coords=4,
+        )
 
     legend_elements = []
     for k, v in color_dict.items():
@@ -695,3 +818,275 @@ def plot_adaptive_mask(
     )
     adaptive_mask_plot = f"{io_generator.prefix}adaptive_mask.svg"
     fig.savefig(os.path.join(io_generator.out_dir, "figures", adaptive_mask_plot))
+
+
+def plot_gscontrol(
+    *,
+    io_generator: io.OutputGenerator,
+    gscontrol: list,
+    png_cmap: str,
+):
+    """Plot the results of the gscontrol steps.
+
+    Parameters
+    ----------
+    io_generator : :obj:`~tedana.io.OutputGenerator`
+        The output generator for this workflow.
+    gscontrol : list
+        List of gscontrol methods applied.
+    """
+    import pandas as pd
+
+    if "gsr" in gscontrol or "mir" in gscontrol:
+        confounds_file = io_generator.get_name("confounds tsv")
+        confounds_df = pd.read_table(confounds_file)
+
+        # Get repetition time from reference image
+        tr = io_generator.reference_img.header.get_zooms()[-1]
+
+    if "gsr" in gscontrol:
+        gsr_img = nb.load(io_generator.get_name("gs img"))
+
+        # Get fft and freqs for this component
+        # adapted from @dangom
+        timeseries = confounds_df["global_signal"].values
+        spectrum, freqs = utils.get_spectrum(timeseries, tr)
+
+        plot_name = f"{io_generator.prefix}gsr_boldmap.svg"
+        plot_name = os.path.join(io_generator.out_dir, "figures", plot_name)
+
+        plot_component(
+            stat_img=gsr_img,
+            component_timeseries=timeseries,
+            power_spectrum=spectrum,
+            frequencies=freqs,
+            tr=tr,
+            classification_color="red",
+            png_cmap=png_cmap,
+            title="Global Signal Regression",
+            out_file=plot_name,
+        )
+
+    if "mir" in gscontrol:
+        mir_img = nb.load(io_generator.get_name("t1 like img"))
+
+        # Get fft and freqs for this component
+        # adapted from @dangom
+        timeseries = confounds_df["mir_global_signal"].values
+        spectrum, freqs = utils.get_spectrum(timeseries, tr)
+
+        plot_name = f"{io_generator.prefix}mir_boldmap.svg"
+        plot_name = os.path.join(io_generator.out_dir, "figures", plot_name)
+
+        plot_component(
+            stat_img=mir_img,
+            component_timeseries=timeseries,
+            power_spectrum=spectrum,
+            frequencies=freqs,
+            tr=tr,
+            classification_color="red",
+            png_cmap=png_cmap,
+            title="Minimum Image Regression",
+            out_file=plot_name,
+        )
+
+
+def plot_heatmap(
+    *,
+    correlation_df: pd.DataFrame,
+    component_table: pd.DataFrame,
+    out_file: str,
+):
+    """Plot a heatmap of correlations between external regressors and ICA components.
+
+    Parameters
+    ----------
+    correlation_df : (E x C) :obj:`pandas.DataFrame`
+        A DataFrame where rows are external regressor names, columns are component names,
+        and values are the Pearson correlation coefficients.
+    component_table : pandas.DataFrame
+        Component table.
+    out_file : str
+        The output file name.
+    """
+    import re
+
+    import scipy.cluster.hierarchy as spc
+    import seaborn as sns
+
+    corr_df = correlation_df.copy()
+    regressors = corr_df.index.tolist()
+
+    # Perform hierarchical clustering on rows
+    corr = corr_df.T.corr().values
+    pdist_uncondensed = 1.0 - corr
+    pdist_condensed = np.concatenate([row[i + 1 :] for i, row in enumerate(pdist_uncondensed)])
+    linkage = spc.linkage(pdist_condensed, method="complete")
+    cluster_assignments = spc.fcluster(linkage, 0.5 * pdist_condensed.max(), "distance")
+    idx = np.argsort(cluster_assignments)
+    new_regressor_order = [regressors[i] for i in idx]
+    corr_df = corr_df.loc[new_regressor_order]
+
+    # Get the metrics for the models from the component table
+    pattern = "(R2stat .* model)"
+    searches = [re.search(pattern, col) for col in component_table.columns]
+    models = [search.group(1) for search in searches if search is not None]
+    models_df = component_table[models]
+    # Remove the R2stat string from the models_df column names
+    models_df.columns = models_df.columns.str.replace("R2stat ", "").str.replace(" model", "")
+    models_df = models_df.T  # transpose so components are columns
+
+    n_regressors = corr_df.shape[0]
+    n_components = corr_df.shape[1]
+    n_models = models_df.shape[0]
+    ratio = n_regressors / n_models
+
+    fig, axes = plt.subplots(
+        figsize=(n_components * 0.25, (n_regressors * 0.25) + (n_models * 0.25) + 0.5),
+        nrows=2,
+        height_ratios=[n_regressors, n_models],
+        sharex=True,
+    )
+    sns.heatmap(
+        corr_df,
+        cmap="seismic",
+        center=0,
+        vmax=1,
+        vmin=-1,
+        square=True,
+        linewidths=0.5,
+        cbar_kws={
+            "shrink": 0.85,
+            "label": "Correlation",
+            "ticks": [-1, 0, 1],
+            "pad": 0.01,
+            "aspect": 20,
+        },
+        ax=axes[0],
+    )
+    axes[0].tick_params(axis="y", labelrotation=0)
+    axes[0].set_xticks([])
+    axes[0].tick_params(axis="x", bottom=False)
+
+    sns.heatmap(
+        models_df,
+        cmap="Reds",
+        center=0.5,
+        vmax=1,
+        vmin=0,
+        square=True,
+        linewidths=0.5,
+        cbar_kws={
+            "shrink": 0.85,
+            "label": "R-Squared",
+            "ticks": [0, 1],
+            "pad": 0.01,
+            "aspect": 20 / ratio,
+        },
+        ax=axes[1],
+    )
+    axes[1].tick_params(axis="y", labelrotation=0)
+    axes[1].set_xlabel("Component", fontsize=16)
+
+    fig.savefig(out_file, bbox_inches="tight")
+
+
+def _correlate_dataframes(df1, df2):
+    """Correlate each column in two DataFrames using numpy.corrcoef.
+
+    Parameters
+    ----------
+    df1 : pandas.DataFrame of shape (T, C)
+        The first DataFrame.
+    df2 : pandas.DataFrame of shape (T, E)
+        The second DataFrame. Rows must align with df1.
+
+    Returns
+    -------
+    correlation_df : pandas.DataFrame of shape (C, E)
+        A DataFrame where rows are columns from df1, columns are columns from df2,
+        and values are the Pearson correlation coefficients.
+    """
+    if not isinstance(df1, pd.DataFrame) or not isinstance(df2, pd.DataFrame):
+        raise ValueError("Both inputs must be pandas DataFrames.")
+
+    if df1.shape[0] != df2.shape[0]:
+        raise ValueError("DataFrames must have the same number of rows.")
+
+    # Convert DataFrames to numpy arrays
+    arr1 = df1.values
+    arr2 = df2.values
+
+    # Concatenate arrays column-wise
+    # This creates an array where the first df1.shape[1] columns are from df1
+    # and the subsequent columns are from df2.
+    combined_arr = np.hstack((arr1, arr2))
+
+    # Calculate the full correlation matrix.
+    # np.corrcoef expects variables as rows, so we transpose combined_arr.
+    # If df1 has m columns and df2 has n columns, combined_arr.T has m+n rows.
+    # full_corr_matrix will be an (m+n) x (m+n) matrix.
+    full_corr_matrix = np.corrcoef(combined_arr.T)
+
+    # Extract the part of the matrix that corresponds to correlations
+    # between columns of df1 and columns of df2.
+    # This is the block from row 0 to df1.shape[1]-1,
+    # and from column df1.shape[1] to the end.
+    num_cols_df1 = df1.shape[1]
+    cross_corr_matrix = full_corr_matrix[:num_cols_df1, num_cols_df1:]
+
+    # Convert the result back to a DataFrame with appropriate labels
+    correlation_df = pd.DataFrame(cross_corr_matrix, index=df1.columns, columns=df2.columns)
+    return correlation_df
+
+
+def plot_decay_variance(
+    *,
+    io_generator: io.OutputGenerator,
+    adaptive_mask: np.ndarray,
+):
+    """Plot the variance of the T2* and S0 estimates.
+
+    Parameters
+    ----------
+    io_generator : :obj:`~tedana.io.OutputGenerator`
+        The output generator for this workflow.
+    adaptive_mask : (S,) :obj:`numpy.ndarray`
+        Array where each value indicates the number of echoes with good signal
+        for that voxel. This mask may be thresholded; for example, with values
+        less than 3 set to 0.
+        For more information on thresholding, see `make_adaptive_mask`.
+    """
+    # Mask that only includes values >=2 (i.e. at least 2 good echoes)
+    mask_img = io.new_nii_like(io_generator.reference_img, (adaptive_mask >= 2).astype(np.int32))
+
+    names = [
+        "stat-variance_desc-t2star_statmap",
+        "stat-variance_desc-s0_statmap",
+        "stat-covariance_desc-t2star+s0_statmap",
+    ]
+    imgs = ["t2star variance img", "s0 variance img", "t2star-s0 covariance img"]
+    for name, img in zip(names, imgs):
+        in_file = io_generator.get_name(img)
+        data = masking.apply_mask(in_file, mask_img)
+        data_p02, data_p98 = np.percentile(data, [2, 98])
+        plot_name = f"{io_generator.prefix}{name}.svg"
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="A non-diagonal affine.*",
+                category=UserWarning,
+            )
+            plotting.plot_stat_map(
+                in_file,
+                bg_img=None,
+                display_mode="mosaic",
+                symmetric_cbar=False,
+                black_bg=True,
+                cmap="Reds",
+                vmin=data_p02,
+                vmax=data_p98,
+                annotate=False,
+                output_file=os.path.join(io_generator.out_dir, "figures", plot_name),
+                resampling_interpolation="nearest",
+            )

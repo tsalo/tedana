@@ -334,6 +334,49 @@
         "bug",
         "doc"
       ]
+    },
+    {
+      "login": "Lestropie",
+      "name": "Robert Smith",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5637955?v=4",
+      "profile": "http://www.mrtrix.org",
+      "contributions": [
+        "code",
+        "design",
+        "ideas",
+        "review"
+      ]
+    },
+    {
+      "login": "BahmanTahayori",
+      "name": "Bahman ",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19523962?v=4",
+      "profile": "https://github.com/BahmanTahayori",
+      "contributions": [
+        "code",
+        "design",
+        "ideas"
+      ]
+    },
+    {
+      "login": "katielamar",
+      "name": "Katie Lamar",
+      "avatar_url": "https://avatars.githubusercontent.com/u/65981856?v=4",
+      "profile": "https://katielamar.github.io/",
+      "contributions": [
+        "code",
+        "design",
+        "ideas"
+      ]
+    },
+    {
+      "login": "marlyr",
+      "name": "Marly Rubin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/75410817?v=4",
+      "profile": "https://marlyr.github.io/",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 5,

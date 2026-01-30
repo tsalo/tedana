@@ -1,5 +1,6 @@
 """Tests for the tedana.selection.selection_utils module."""
 
+import logging
 import os
 
 import numpy as np
@@ -32,6 +33,8 @@ def sample_component_table(options=None):
 
     if (options == "provclass") or (options == "unclass"):
         component_table.loc[[2, 4, 6, 8], "classification"] = "provisional accept"
+        component_table.loc[[2, 4], "classification_tags"] = "borderline accept"
+        component_table.loc[[6], "classification_tags"] = "borderline accept, border accept 2"
     return component_table
 
 
@@ -94,7 +97,7 @@ def test_selectcomps2use_succeeds():
         [2, 6, 4],
         "NotALabel",
     ]
-    # Given the pre-defined comptable in sample_table_selector, these
+    # Given the pre-defined component_table in sample_table_selector, these
     #   are the expected number of components that should be selected
     #   for each of the above decide_comps_options
     decide_comps_lengths = [4, 17, 21, 21, 1, 3, 0]
@@ -128,7 +131,7 @@ def test_selectcomps2use_fails():
         selection_utils.selectcomps2use(selector.component_table_, "all")
 
 
-def test_comptable_classification_changer_succeeds():
+def test_comptable_classification_changer_succeeds(caplog):
     """All conditions where comptable_classification_changer should run.
 
     Note: This confirms the function runs, but not that outputs are accurate.
@@ -137,21 +140,34 @@ def test_comptable_classification_changer_succeeds():
     check the logger.
     """
 
-    def validate_changes(expected_classification):
+    def validate_changes(expected_classification, added_tags):
         # check every element that was supposed to change, did change
         changeidx = decision_boolean.index[np.asarray(decision_boolean) == boolstate]
         new_vals = selector.component_table_.loc[changeidx, "classification"]
-        for val in new_vals:
-            assert val == expected_classification
+        orig_tags = orig_component_table.loc[changeidx, "classification_tags"]
+        new_tags = selector.component_table_.loc[changeidx, "classification_tags"]
+        for idx in changeidx:
+            assert new_vals[idx] == expected_classification
+            if "," in orig_tags[idx]:
+                orig_tags_set = set(orig_tags[idx].split(","))
+            else:
+                orig_tags_set = {orig_tags[idx]}
+            if "," in new_tags[idx]:
+                new_tags_set = set(new_tags[idx].split(","))
+            else:
+                new_tags_set = {new_tags[idx]}
+            # Note: added_tags should be input as a set
+            assert new_tags_set - orig_tags_set == added_tags
 
     # Change if true
     selector = sample_selector(options="provclass")
+    orig_component_table = selector.component_table_.copy()
     decision_boolean = selector.component_table_["classification"] == "provisional accept"
     boolstate = True
     selector = selection_utils.comptable_classification_changer(
         selector, boolstate, "accepted", decision_boolean, tag_if="testing_tag"
     )
-    validate_changes("accepted")
+    validate_changes("accepted", {"testing_tag"})
 
     # Run nochange condition
     selector = sample_selector(options="provclass")
@@ -159,7 +175,7 @@ def test_comptable_classification_changer_succeeds():
     selector = selection_utils.comptable_classification_changer(
         selector, boolstate, "nochange", decision_boolean, tag_if="testing_tag"
     )
-    validate_changes("provisional accept")
+    validate_changes("provisional accept", {"testing_tag"})
 
     # Change if false
     selector = sample_selector(options="provclass")
@@ -168,19 +184,23 @@ def test_comptable_classification_changer_succeeds():
     selector = selection_utils.comptable_classification_changer(
         selector, boolstate, "rejected", decision_boolean, tag_if="testing_tag1, testing_tag2"
     )
-    validate_changes("rejected")
+    validate_changes("rejected", {"testing_tag1", "testing_tag2"})
 
     # Change from accepted to rejected, which should output a warning
     # (test if the warning appears?)
+    caplog.clear()
     selector = sample_selector(options="provclass")
     decision_boolean = selector.component_table_["classification"] == "accepted"
     boolstate = True
     selector = selection_utils.comptable_classification_changer(
         selector, boolstate, "rejected", decision_boolean, tag_if="testing_tag"
     )
-    validate_changes("rejected")
+    validate_changes("rejected", {"testing_tag"})
+
+    assert "Some classifications are changing away from accepted or rejected" in caplog.text
 
     # Change from rejected to accepted and suppress warning
+    caplog.clear()
     selector = sample_selector(options="provclass")
     decision_boolean = selector.component_table_["classification"] == "rejected"
     boolstate = True
@@ -192,7 +212,24 @@ def test_comptable_classification_changer_succeeds():
         tag_if="testing_tag",
         dont_warn_reclassify=True,
     )
-    validate_changes("accepted")
+    validate_changes("accepted", {"testing_tag"})
+    assert "Some classifications are changing away from accepted or rejected" not in caplog.text
+
+    # Give an info message if no components fit criterion
+    caplog.clear()
+    caplog.set_level(logging.INFO)
+    selector = sample_selector(options="provclass")
+    decision_boolean = selector.component_table_["classification"] == "Not a label"
+    boolstate = True
+    selector = selection_utils.comptable_classification_changer(
+        selector,
+        boolstate,
+        "accepted",
+        decision_boolean,
+        tag_if="testing_tag",
+        dont_warn_reclassify=True,
+    )
+    assert "No components fit criterion" in caplog.text
 
 
 def test_change_comptable_classifications_succeeds():
@@ -226,7 +263,7 @@ def test_change_comptable_classifications_succeeds():
 
 def test_clean_dataframe_smoke():
     """A smoke test for the clean_dataframe function."""
-    component_table = sample_component_table(options="comptable")
+    component_table = sample_component_table(options="component_table")
     selection_utils.clean_dataframe(component_table)
 
 
@@ -237,26 +274,39 @@ def test_clean_dataframe_smoke():
 
 def test_confirm_metrics_exist_succeeds():
     """Tests confirm_metrics_exist run with correct inputs."""
-    component_table = sample_component_table(options="comptable")
+    component_table = sample_component_table(options="component_table")
 
     # Testing for metrics that exist with 1 or 2 necessary metrics in a set
     # Returns True if an undefined metric exists so using "assert not"
+    # Testing if it can find a single metric
     assert not selection_utils.confirm_metrics_exist(component_table, {"kappa"})
+    # Testing if it can find multiple metrics
     assert not selection_utils.confirm_metrics_exist(component_table, {"kappa", "rho"})
+    # Testing if it can find metrics that use regular expressions
+    assert not selection_utils.confirm_metrics_exist(component_table, {"kappa", "^count.*$"})
 
 
 def test_confirm_metrics_exist_fails():
     """Tests confirm_metrics_exist for failure conditions."""
 
-    component_table = sample_component_table(options="comptable")
+    component_table = sample_component_table(options="component_table")
 
     # Should fail with and error would have default or pre-defined file name
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Necessary metrics for unknown function"):
         selection_utils.confirm_metrics_exist(component_table, {"kappa", "quack"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"MISSING METRICS: \['quack'\]"):
+        selection_utils.confirm_metrics_exist(
+            component_table,
+            necessary_metrics={"kappa", "quack"},
+            function_name="dec_left_op_right",
+        )
+    with pytest.raises(ValueError, match="Necessary metrics for farm"):
         selection_utils.confirm_metrics_exist(
             component_table, {"kappa", "mooo"}, function_name="farm"
         )
+
+    with pytest.raises(ValueError, match=r"MISSING METRICS: \['\^mount.\*\$'\]."):
+        selection_utils.confirm_metrics_exist(component_table, {"kappa", "^mount.*$"})
 
 
 def test_log_decision_tree_step_smoke():
@@ -314,7 +364,7 @@ def test_log_decision_tree_step_smoke():
 def test_log_classification_counts_smoke():
     """A smoke test for log_classification_counts."""
 
-    component_table = sample_component_table(options="comptable")
+    component_table = sample_component_table(options="component_table")
 
     selection_utils.log_classification_counts(5, component_table)
 
@@ -375,7 +425,7 @@ def test_kappa_elbow_kundu_smoke():
         kappa_allcomps_elbow,
         kappa_nonsig_elbow,
         varex_upper_p,
-    ) = selection_utils.kappa_elbow_kundu(component_table, n_echos=5)
+    ) = selection_utils.kappa_elbow_kundu(component_table, n_independent_echos=5)
     assert isinstance(kappa_elbow_kundu, float)
     assert isinstance(kappa_allcomps_elbow, float)
     assert isinstance(kappa_nonsig_elbow, float)
@@ -388,7 +438,7 @@ def test_kappa_elbow_kundu_smoke():
         kappa_allcomps_elbow,
         kappa_nonsig_elbow,
         varex_upper_p,
-    ) = selection_utils.kappa_elbow_kundu(component_table, n_echos=6)
+    ) = selection_utils.kappa_elbow_kundu(component_table, n_independent_echos=6)
     assert isinstance(kappa_elbow_kundu, float)
     assert isinstance(kappa_allcomps_elbow, float)
     assert isinstance(kappa_nonsig_elbow, type(None))
@@ -402,7 +452,7 @@ def test_kappa_elbow_kundu_smoke():
         varex_upper_p,
     ) = selection_utils.kappa_elbow_kundu(
         component_table,
-        n_echos=5,
+        n_independent_echos=5,
         comps2use=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 20],
     )
     assert isinstance(kappa_elbow_kundu, float)
@@ -421,7 +471,7 @@ def test_rho_elbow_kundu_liberal_smoke():
         rho_allcomps_elbow,
         rho_unclassified_elbow,
         elbow_f05,
-    ) = selection_utils.rho_elbow_kundu_liberal(component_table, n_echos=3)
+    ) = selection_utils.rho_elbow_kundu_liberal(component_table, n_independent_echos=3)
     assert isinstance(rho_elbow_kundu, float)
     assert isinstance(rho_allcomps_elbow, float)
     assert isinstance(rho_unclassified_elbow, float)
@@ -434,7 +484,7 @@ def test_rho_elbow_kundu_liberal_smoke():
         rho_unclassified_elbow,
         elbow_f05,
     ) = selection_utils.rho_elbow_kundu_liberal(
-        component_table, n_echos=3, rho_elbow_type="liberal"
+        component_table, n_independent_echos=3, rho_elbow_type="liberal"
     )
     assert isinstance(rho_elbow_kundu, float)
     assert isinstance(rho_allcomps_elbow, float)
@@ -449,7 +499,7 @@ def test_rho_elbow_kundu_liberal_smoke():
         elbow_f05,
     ) = selection_utils.rho_elbow_kundu_liberal(
         component_table,
-        n_echos=3,
+        n_independent_echos=3,
         rho_elbow_type="kundu",
         comps2use=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 20],
         subset_comps2use=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 18, 20],
@@ -466,7 +516,7 @@ def test_rho_elbow_kundu_liberal_smoke():
         rho_allcomps_elbow,
         rho_unclassified_elbow,
         elbow_f05,
-    ) = selection_utils.rho_elbow_kundu_liberal(component_table, n_echos=3)
+    ) = selection_utils.rho_elbow_kundu_liberal(component_table, n_independent_echos=3)
     assert isinstance(rho_elbow_kundu, float)
     assert isinstance(rho_allcomps_elbow, float)
     assert isinstance(rho_unclassified_elbow, type(None))
@@ -474,7 +524,7 @@ def test_rho_elbow_kundu_liberal_smoke():
 
     with pytest.raises(ValueError):
         selection_utils.rho_elbow_kundu_liberal(
-            component_table, n_echos=3, rho_elbow_type="perfect"
+            component_table, n_independent_echos=3, rho_elbow_type="perfect"
         )
 
 

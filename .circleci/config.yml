@@ -4,80 +4,28 @@
 #
 version: 2.1
 orbs:
-  codecov: codecov/codecov@1.0.5
+  codecov: codecov/codecov@5.2.1
 jobs:
-  makeenv_38:
-    docker:
-      - image: continuumio/miniconda3
-    working_directory: /tmp/src/tedana
-    steps:
-      - checkout
-      - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
-      - run:
-          name: Generate environment
-          command: |
-            if [ ! -d /opt/conda/envs/tedana_py38 ]; then
-              conda create -yq -n tedana_py38 python=3.8
-              source activate tedana_py38
-              pip install -e .[tests]
-            fi
-      - save_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
-          paths:
-            - /opt/conda/envs/tedana_py38
-
-  unittest_38:
-    docker:
-      - image: continuumio/miniconda3
-    working_directory: /tmp/src/tedana
-    steps:
-      - checkout
-      - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
-      - run:
-          name: Running unit tests
-          command: |
-            apt-get update
-            apt-get install -y make
-            source activate tedana_py38  # depends on makeenv_38
-            make unittest
-            mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.py38
-      - persist_to_workspace:
-          root: /tmp
-          paths:
-            - src/coverage/.coverage.py38
-
   unittest_39:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.9
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py39-v2-{{ checksum "pyproject.toml" }}
-      - run:
-          name: Generate environment
-          command: |
-            apt-get update
-            apt-get install -yqq make
-            if [ ! -d /opt/conda/envs/tedana_py39 ]; then
-              conda create -yq -n tedana_py39 python=3.9
-              source activate tedana_py39
-              pip install .[tests]
-            fi
+          keys:
+            - tox-py39-latest-v1-{{ checksum "uv.lock" }}
+            - tox-py39-latest-v1-
       - run:
           name: Running unit tests
           command: |
-            source activate tedana_py39
-            make unittest
+            uvx tox -e py39-latest
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.py39
+            mv .coverage /tmp/src/coverage/.coverage.py39
       - save_cache:
-          key: conda-py39-v2-{{ checksum "pyproject.toml" }}
+          key: tox-py39-latest-v1-{{ checksum "uv.lock" }}
           paths:
-            - /opt/conda/envs/tedana_py39
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
@@ -85,33 +33,24 @@ jobs:
 
   unittest_310:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.10
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py310-v1-{{ checksum "pyproject.toml" }}
-      - run:
-          name: Generate environment
-          command: |
-            apt-get update
-            apt-get install -yqq make
-            if [ ! -d /opt/conda/envs/tedana_py310 ]; then
-              conda create -yq -n tedana_py310 python=3.10
-              source activate tedana_py310
-              pip install .[tests]
-            fi
+          keys:
+            - tox-py310-latest-v1-{{ checksum "uv.lock" }}
+            - tox-py310-latest-v1-
       - run:
           name: Running unit tests
           command: |
-            source activate tedana_py310
-            make unittest
+            uvx tox -e py310-latest
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.py310
+            mv .coverage /tmp/src/coverage/.coverage.py310
       - save_cache:
-          key: conda-py310-v1-{{ checksum "pyproject.toml" }}
+          key: tox-py310-latest-v1-{{ checksum "uv.lock" }}
           paths:
-            - /opt/conda/envs/tedana_py310
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
@@ -119,33 +58,24 @@ jobs:
 
   unittest_311:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.11
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py311-v1-{{ checksum "pyproject.toml" }}
-      - run:
-          name: Generate environment
-          command: |
-            apt-get update
-            apt-get install -yqq make
-            if [ ! -d /opt/conda/envs/tedana_py311 ]; then
-              conda create -yq -n tedana_py311 python=3.11
-              source activate tedana_py311
-              pip install .[tests]
-            fi
+          keys:
+            - tox-py311-latest-v1-{{ checksum "uv.lock" }}
+            - tox-py311-latest-v1-
       - run:
           name: Running unit tests
           command: |
-            source activate tedana_py311
-            make unittest
+            uvx tox -e py311-latest
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.py311
+            mv .coverage /tmp/src/coverage/.coverage.py311
       - save_cache:
-          key: conda-py311-v1-{{ checksum "pyproject.toml" }}
+          key: tox-py311-latest-v1-{{ checksum "uv.lock" }}
           paths:
-            - /opt/conda/envs/tedana_py311
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
@@ -153,240 +83,268 @@ jobs:
 
   unittest_312:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.12
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py312-v1-{{ checksum "pyproject.toml" }}
-      - run:
-          name: Generate environment
-          command: |
-            apt-get update
-            apt-get install -yqq make
-            if [ ! -d /opt/conda/envs/tedana_py312 ]; then
-              conda create -yq -n tedana_py312 python=3.12
-              source activate tedana_py312
-              pip install .[tests]
-            fi
+          keys:
+            - tox-py312-latest-v1-{{ checksum "uv.lock" }}
+            - tox-py312-latest-v1-
       - run:
           name: Running unit tests
           command: |
-            source activate tedana_py312
-            make unittest
+            uvx tox -e py312-latest
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.py312
+            mv .coverage /tmp/src/coverage/.coverage.py312
       - save_cache:
-          key: conda-py312-v1-{{ checksum "pyproject.toml" }}
+          key: tox-py312-latest-v1-{{ checksum "uv.lock" }}
           paths:
-            - /opt/conda/envs/tedana_py312
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
             - src/coverage/.coverage.py312
 
-  style_check:
+  unittest_313:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.13
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
+          keys:
+            - tox-py313-latest-v1-{{ checksum "uv.lock" }}
+            - tox-py313-latest-v1-
+      - run:
+          name: Running unit tests
+          command: |
+            uvx tox -e py313-latest
+            mkdir /tmp/src/coverage
+            mv .coverage /tmp/src/coverage/.coverage.py313
+      - save_cache:
+          key: tox-py313-latest-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - src/coverage/.coverage.py313
+
+  style_check:
+    docker:
+      - image: cimg/python:3.13
+    working_directory: /tmp/src/tedana
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - tox-lint-v1-{{ checksum "uv.lock" }}
+            - tox-lint-v1-
       - run:
           name: Style check
           command: |
-            apt-get update
-            apt-get install -yqq make
-            source activate tedana_py38  # depends on makeenv38
-            make lint
+            uvx tox -e lint
+      - save_cache:
+          key: tox-lint-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
 
   three-echo:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.9
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
+          keys:
+            - tox-py39-three-echo-v1-{{ checksum "uv.lock" }}
+            - tox-py39-three-echo-v1-
       - run:
-          name: Run integration tests
-          no_output_timeout: 40m
+          name: Running integration tests
           command: |
-            apt-get update
-            apt-get install -yqq make
-            source activate tedana_py38  # depends on makeenv_38
-            make three-echo
+            uvx tox -e three-echo
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.three-echo
-      - store_artifacts:
-          path: /tmp/src/tedana/.testing_data_cache/outputs
+            mv .coverage /tmp/src/coverage/.coverage.three-echo
+      - save_cache:
+          key: tox-py39-three-echo-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
             - src/coverage/.coverage.three-echo
+      - run:
+          name: Remove NIfTI files to reduce artifact size
+          command: find /tmp/src/tedana/.testing_data_cache/outputs -name "*.nii*" -delete || true
+      - store_artifacts:
+          path: /tmp/src/tedana/.testing_data_cache/outputs/three-echo
+          destination: three-echo-outputs
 
   four-echo:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.9
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
+          keys:
+            - tox-py39-four-echo-v1-{{ checksum "uv.lock" }}
+            - tox-py39-four-echo-v1-
       - run:
-          name: Run integration tests
-          no_output_timeout: 40m
+          name: Running integration tests
           command: |
-            apt-get update
-            apt-get install -yqq make
-            source activate tedana_py38  # depends on makeenv_38
-            make four-echo
+            uvx tox -e four-echo
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.four-echo
-      - store_artifacts:
-          path: /tmp/src/tedana/.testing_data_cache/outputs
+            mv .coverage /tmp/src/coverage/.coverage.four-echo
+      - save_cache:
+          key: tox-py39-four-echo-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
             - src/coverage/.coverage.four-echo
+      - run:
+          name: Remove NIfTI files to reduce artifact size
+          command: find /tmp/src/tedana/.testing_data_cache/outputs -name "*.nii*" -delete || true
+      - store_artifacts:
+          path: /tmp/src/tedana/.testing_data_cache/outputs/four-echo
+          destination: four-echo-outputs
 
   five-echo:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.9
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
+          keys:
+            - tox-py39-five-echo-v1-{{ checksum "uv.lock" }}
+            - tox-py39-five-echo-v1-
       - run:
-          name: Run integration tests
-          no_output_timeout: 40m
+          name: Running integration tests
           command: |
-            apt-get update
-            apt-get install -yqq make
-            source activate tedana_py38  # depends on makeenv_38
-            make five-echo
+            uvx tox -e five-echo
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.five-echo
-      - store_artifacts:
-          path: /tmp/src/tedana/.testing_data_cache/outputs
+            mv .coverage /tmp/src/coverage/.coverage.five-echo
+      - save_cache:
+          key: tox-py39-five-echo-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
             - src/coverage/.coverage.five-echo
+      - run:
+          name: Remove NIfTI files to reduce artifact size
+          command: find /tmp/src/tedana/.testing_data_cache/outputs -name "*.nii*" -delete || true
+      - store_artifacts:
+          path: /tmp/src/tedana/.testing_data_cache/outputs/five-echo
+          destination: five-echo-outputs
 
   reclassify:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.9
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
+          keys:
+            - tox-py39-reclassify-v1-{{ checksum "uv.lock" }}
+            - tox-py39-reclassify-v1-
       - run:
-          name: Run integration tests
-          no_output_timeout: 40m
+          name: Running integration tests
           command: |
-            apt-get update
-            apt-get install -yqq make
-            source activate tedana_py38  # depends on makeenv_38
-            make reclassify
+            uvx tox -e reclassify
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.reclassify
-      - store_artifacts:
-          path: /tmp/src/tedana/.testing_data_cache/outputs
+            mv .coverage /tmp/src/coverage/.coverage.reclassify
+      - save_cache:
+          key: tox-py39-reclassify-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
             - src/coverage/.coverage.reclassify
+      - run:
+          name: Remove NIfTI files to reduce artifact size
+          command: find /tmp/src/tedana/.testing_data_cache/outputs -name "*.nii*" -delete || true
+      - store_artifacts:
+          path: /tmp/src/tedana/.testing_data_cache/outputs/reclassify
+          destination: reclassify-outputs
 
   t2smap:
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.9
     working_directory: /tmp/src/tedana
     steps:
       - checkout
       - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
+          keys:
+            - tox-py39-t2smap-v1-{{ checksum "uv.lock" }}
+            - tox-py39-t2smap-v1-
       - run:
-          name: Run integration tests
-          no_output_timeout: 40m
+          name: Running integration tests
           command: |
-            apt-get update
-            apt-get install -yqq make
-            source activate tedana_py38  # depends on makeenv_38
-            make t2smap
+            uvx tox -e t2smap
             mkdir /tmp/src/coverage
-            mv /tmp/src/tedana/.coverage /tmp/src/coverage/.coverage.t2smap
-      - store_artifacts:
-          path: /tmp/src/tedana/.testing_data_cache/outputs
+            mv .coverage /tmp/src/coverage/.coverage.t2smap
+      - save_cache:
+          key: tox-py39-t2smap-v1-{{ checksum "uv.lock" }}
+          paths:
+            - .tox
       - persist_to_workspace:
           root: /tmp
           paths:
             - src/coverage/.coverage.t2smap
+      - run:
+          name: Remove NIfTI files to reduce artifact size
+          command: find /tmp/src/tedana/.testing_data_cache/outputs -name "*.nii*" -delete || true
+      - store_artifacts:
+          path: /tmp/src/tedana/.testing_data_cache/outputs/t2smap_five-echo
+          destination: t2smap-outputs
 
   merge_coverage:
     working_directory: /tmp/src/tedana
     docker:
-      - image: continuumio/miniconda3
+      - image: cimg/python:3.13
     steps:
       - attach_workspace:
           at: /tmp
       - checkout
-      - restore_cache:
-          key: conda-py38-v2-{{ checksum "pyproject.toml" }}
       - run:
           name: Merge coverage files
           command: |
-            apt-get update
-            apt-get install -yqq curl
-            source activate tedana_py38  # depends on makeenv38
             cd /tmp/src/coverage/
-            coverage combine
-            coverage xml
+            uvx coverage combine
+            uvx coverage xml
+            mv coverage.xml /tmp/src/tedana/
       - store_artifacts:
           path: /tmp/src/coverage
-      - codecov/upload:
-          file: /tmp/src/coverage/coverage.xml
+      - codecov/upload
 
 workflows:
-  version: 2.1
-  build_test:
+  upload-to-codecov:
     jobs:
-      - makeenv_38
-      - unittest_38:
-          requires:
-            - makeenv_38
-      - style_check:
-          requires:
-            - makeenv_38
-      - three-echo:
-          requires:
-            - makeenv_38
-      - four-echo:
-          requires:
-            - makeenv_38
-      - five-echo:
-          requires:
-            - makeenv_38
-      - reclassify:
-          requires:
-            - makeenv_38
-      - t2smap:
-          requires:
-            - makeenv_38
       - unittest_39
       - unittest_310
       - unittest_311
       - unittest_312
+      - unittest_313
+      - style_check
+      - three-echo
+      - four-echo
+      - five-echo
+      - reclassify
+      - t2smap
       - merge_coverage:
           requires:
-            - unittest_38
             - unittest_39
             - unittest_310
             - unittest_311
             - unittest_312
+            - unittest_313
             - three-echo
             - four-echo
             - five-echo

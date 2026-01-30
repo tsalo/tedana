@@ -16,11 +16,13 @@ from typing import List
 import nibabel as nib
 import numpy as np
 import pandas as pd
-from nilearn._utils import check_niimg
+import requests
+from nilearn._utils.niimg_conversions import check_niimg
 from nilearn.image import new_img_like
+from scipy import stats
 
 from tedana import utils
-from tedana.stats import computefeats2, get_coeffs
+from tedana.stats import get_coeffs
 
 LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
@@ -143,9 +145,9 @@ class OutputGenerator:
             del old_registry["root"]
             for k, v in old_registry.items():
                 if isinstance(v, list):
-                    self.registry[k] = [op.join(rel_root, vv) for vv in v]
+                    self.registry[k] = [op.normpath(op.join(rel_root, vv)) for vv in v]
                 else:
-                    self.registry[k] = op.join(rel_root, v)
+                    self.registry[k] = op.normpath(op.join(rel_root, v))
 
         if not op.isdir(self.out_dir):
             LGR.info(f"Generating output directory: {self.out_dir}")
@@ -154,6 +156,14 @@ class OutputGenerator:
         if not op.isdir(self.figures_dir) and make_figures:
             LGR.info(f"Generating figures directory: {self.figures_dir}")
             os.mkdir(self.figures_dir)
+
+        # Remove files that are appended to instead of overwritten.
+        if overwrite:
+            files_to_remove = ["confounds tsv"]
+            for file_ in files_to_remove:
+                filepath = self.get_name(file_)
+                if op.exists(filepath):
+                    os.remove(filepath)
 
     def _determine_extension(self, description, name):
         """Infer the extension for a file based on its description.
@@ -346,6 +356,58 @@ class OutputGenerator:
         deblanked = data.replace("", np.nan)
         deblanked.to_csv(name, sep="\t", lineterminator="\n", na_rep="n/a", index=False)
 
+    def add_df_to_file(self, data, description, **kwargs):
+        """Add a DataFrame to a tsv file, which may or may not exist.
+
+        Parameters
+        ----------
+        data : dict or img_like or pandas.DataFrame
+            Data to save to file.
+        description : str
+            Description of the data, used to determine the appropriate filename from
+            ``self.config``.
+
+        Returns
+        -------
+        name : str
+            The full file path of the saved file.
+        """
+        name = self.get_name(description, **kwargs)
+        if op.isfile(name):
+            old_data = pd.read_table(name)
+            data = pd.concat([old_data, data], axis=1, ignore_index=False)
+
+        self.save_tsv(data, name)
+
+        return name
+
+    def add_dict_to_file(self, data, description, **kwargs):
+        """Add dictionary data to a JSON file, which may or may not exist.
+
+        Parameters
+        ----------
+        data : dict
+            Data to merge into the file.
+        description : str
+            Description of the data, used to determine the appropriate filename from
+            ``self.config``.
+
+        Returns
+        -------
+        name : str
+            The full file path of the saved file.
+        """
+        name = self.get_name(description, **kwargs)
+        if op.isfile(name):
+            old_data = load_json(name)
+            old_data.update(data)
+            data = old_data
+
+        prepped = prep_data_for_json(data)
+        self.save_json(prepped, name)
+
+        return name
+
     def save_self(self):
         """Save the registry to a json file.
 
@@ -381,7 +443,10 @@ class InputHarvester:
             Description of the file to get the path for.
         """
         if description in self._registry.keys():
-            return op.join(self._base_dir, self._registry[description])
+            if isinstance(self._registry[description], list):
+                return [op.join(self._base_dir, f) for f in self._registry[description]]
+            else:
+                return op.join(self._base_dir, self._registry[description])
         else:
             return None
 
@@ -396,7 +461,10 @@ class InputHarvester:
         """
         for ftype, loader in InputHarvester.loaders.items():
             if ftype in description:
-                return loader(self.get_file_path(description))
+                if isinstance(self.get_file_path(description), list):
+                    return [loader(f) for f in self.get_file_path(description)]
+                else:
+                    return loader(self.get_file_path(description))
 
     @property
     def registry(self):
@@ -463,6 +531,52 @@ def load_json(path: str) -> dict:
     return data
 
 
+def download_json(tree: str, out_dir: str) -> str:
+    """Download a json file from figshare unless the file already exists.
+
+    Parameters
+    ----------
+    tree : str
+        The name of the tree to download
+    out_dir : str
+        The directory where the json file will be saved
+
+    Returns
+    -------
+    save_path : str
+        The filepath of the downloaded decision tree.
+    """
+    base_url = "https://api.figshare.com/v2"
+    item_id = 25251433
+
+    fname = tree + ".json" if not tree.endswith(".json") else tree
+    save_path = op.join(out_dir, fname)
+
+    if op.isfile(save_path):
+        return save_path
+
+    try:
+        r = requests.get(f"{base_url}/articles/{item_id}")
+        r.raise_for_status()
+        metadata = r.json()
+
+        file_info = next((f for f in metadata["files"] if f["name"] == fname.lower()), None)
+
+        if not file_info:
+            return
+
+        download_r = requests.get(file_info["download_url"])
+        download_r.raise_for_status()
+
+        with open(save_path, "wb") as f:
+            f.write(download_r.content)
+        LGR.info(f"Tree {tree} downloaded from figshare to {save_path}")
+        return save_path
+
+    except requests.RequestException as e:
+        LGR.error(f"Cannot connect to figshare: {e}")
+
+
 def add_decomp_prefix(comp_num, prefix, max_value):
     """Create component name with leading zeros matching number of components.
 
@@ -489,19 +603,19 @@ def add_decomp_prefix(comp_num, prefix, max_value):
     return comp_name
 
 
-def denoise_ts(data, mmix, mask, comptable):
+def denoise_ts(data, mixing, mask, component_table):
     """Apply component classifications to data for denoising.
 
     Parameters
     ----------
     data : (S x T) array_like
         Input time series
-    mmix : (C x T) array_like
+    mixing : (C x T) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data`
     mask : (S,) array_like
         Boolean mask array
-    comptable : (C x X) :obj:`pandas.DataFrame`
+    component_table : (C x X) :obj:`pandas.DataFrame`
         Component metric table. One row for each component, with a column for
         each metric. Requires at least one column: "classification".
 
@@ -514,34 +628,34 @@ def denoise_ts(data, mmix, mask, comptable):
     lowkts : (S x T) array_like
         Low-Kappa data (i.e., data composed only of rejected components).
     """
-    acc = comptable[comptable.classification == "accepted"].index.values
-    rej = comptable[comptable.classification == "rejected"].index.values
+    acc = component_table[component_table.classification == "accepted"].index.values
+    rej = component_table[component_table.classification == "rejected"].index.values
 
     # mask and de-mean data
     mdata = data[mask]
     dmdata = mdata.T - mdata.T.mean(axis=0)
 
     # get variance explained by retained components
-    betas = get_coeffs(dmdata.T, mmix, mask=None)
-    varexpl = (1 - ((dmdata.T - betas.dot(mmix.T)) ** 2.0).sum() / (dmdata**2.0).sum()) * 100
+    betas = get_coeffs(dmdata.T, mixing, mask=None)
+    varexpl = (1 - ((dmdata.T - betas.dot(mixing.T)) ** 2.0).sum() / (dmdata**2.0).sum()) * 100
     LGR.info(f"Variance explained by decomposition: {varexpl:.02f}%")
 
     # create component-based data
-    hikts = utils.unmask(betas[:, acc].dot(mmix.T[acc, :]), mask)
-    lowkts = utils.unmask(betas[:, rej].dot(mmix.T[rej, :]), mask)
+    hikts = utils.unmask(betas[:, acc].dot(mixing.T[acc, :]), mask)
+    lowkts = utils.unmask(betas[:, rej].dot(mixing.T[rej, :]), mask)
     dnts = utils.unmask(data[mask] - lowkts[mask], mask)
     return dnts, hikts, lowkts
 
 
 # File Writing Functions
-def write_split_ts(data, mmix, mask, comptable, io_generator, echo=0):
+def write_split_ts(data, mixing, mask, component_table, io_generator, echo=0):
     """Split `data` into denoised / noise / ignored time series and save to disk.
 
     Parameters
     ----------
     data : (S x T) array_like
         Input time series
-    mmix : (C x T) array_like
+    mixing : (C x T) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data`
     mask : (S,) array_like
@@ -581,10 +695,10 @@ def write_split_ts(data, mmix, mask, comptable, io_generator, echo=0):
                                              number ``echo``.
     =====================================    ============================================
     """
-    acc = comptable[comptable.classification == "accepted"].index.values
-    rej = comptable[comptable.classification == "rejected"].index.values
+    acc = component_table[component_table.classification == "accepted"].index.values
+    rej = component_table[component_table.classification == "rejected"].index.values
 
-    dnts, hikts, lowkts = denoise_ts(data, mmix, mask, comptable)
+    dnts, hikts, lowkts = denoise_ts(data, mixing, mask, component_table)
 
     if len(acc) != 0:
         if echo != 0:
@@ -614,20 +728,20 @@ def write_split_ts(data, mmix, mask, comptable, io_generator, echo=0):
     LGR.info(f"Writing denoised time series: {fout}")
 
 
-def writeresults(ts, mask, comptable, mmix, io_generator):
+def writeresults(data_optcom, mask, component_table, mixing, io_generator):
     """Denoise `ts` and save all resulting files to disk.
 
     Parameters
     ----------
-    ts : (S x T) array_like
+    data_optcom : (S x T) array_like
         Time series to denoise and save to disk
     mask : (S,) array_like
         Boolean mask array
-    comptable : (C x X) :obj:`pandas.DataFrame`
+    component_table : (C x X) :obj:`pandas.DataFrame`
         Component metric table. One row for each component, with a column for
         each metric. Requires at least two columns: "component" and
         "classification".
-    mmix : (C x T) array_like
+    mixing : (C x T) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data`
     ref_img : :obj:`str` or img_like
@@ -640,52 +754,55 @@ def writeresults(ts, mask, comptable, mmix, io_generator):
     Generated Files
     ---------------
 
-    =========================================    ===========================================
+    =========================================    ===============================================
     Filename                                     Content
-    =========================================    ===========================================
+    =========================================    ===============================================
     desc-denoised_bold.nii.gz                    Denoised time series.
-
     desc-optcomAccepted_bold.nii.gz              High-Kappa time series. (only with verbose)
     desc-optcomRejected_bold.nii.gz              Low-Kappa time series. (only with verbose)
-    desc-ICA_components.nii.gz                   Spatial component maps for all
-                                                 components.
-    desc-ICAAccepted_components.nii.gz           Spatial component maps for accepted
-                                                 components.
+    desc-ICA_components.nii.gz                   Spatial component maps for all components.
+    desc-ICA_stat-z_components.nii.gz            Z-normalized spatial component maps
+                                                 for all components.
+    desc-ICAAccepted_components.nii.gz           Spatial component maps for accepted components.
     desc-ICAAccepted_stat-z_components.nii.gz    Z-normalized spatial component maps
                                                  for accepted components.
-    =========================================    ===========================================
+    =========================================    ===============================================
     """
-    acc = comptable[comptable.classification == "accepted"].index.values
-    write_split_ts(ts, mmix, mask, comptable, io_generator)
+    acc = component_table[component_table.classification == "accepted"].index.values
+    write_split_ts(data_optcom, mixing, mask, component_table, io_generator)
 
-    ts_pes = get_coeffs(ts, mmix, mask)
+    ts_pes = get_coeffs(data_optcom, mixing, mask)
     fout = io_generator.save_file(ts_pes, "ICA components img")
     LGR.info(f"Writing full ICA coefficient feature set: {fout}")
+
+    data_optcom_z = stats.zscore(data_optcom[mask, :], axis=-1)
+    mixing_z = stats.zscore(mixing, axis=0)
+    betas_oc = utils.unmask(get_coeffs(data_optcom_z, mixing_z), mask)
+    fout = io_generator.save_file(betas_oc, "z-scored ICA components img")
+    del data_optcom_z, mixing_z
+    LGR.info(f"Writing Z-normalized spatial component maps: {fout}")
 
     if len(acc) != 0:
         fout = io_generator.save_file(ts_pes[:, acc], "ICA accepted components img")
         LGR.info(f"Writing denoised ICA coefficient feature set: {fout}")
 
-        # write feature versions of components
-        feats = computefeats2(split_ts(ts, mmix, mask, comptable)[0], mmix[:, acc], mask)
-        feats = utils.unmask(feats, mask)
-        fname = io_generator.save_file(feats, "z-scored ICA accepted components img")
-        LGR.info(f"Writing Z-normalized spatial component maps: {fname}")
+        fout = io_generator.save_file(betas_oc[:, acc], "z-scored ICA accepted components img")
+        LGR.info(f"Writing Z-normalized spatial component maps: {fout}")
 
 
-def writeresults_echoes(catd, mmix, mask, comptable, io_generator):
+def writeresults_echoes(data_cat, mixing, mask, component_table, io_generator):
     """Save individually denoised echos to disk.
 
     Parameters
     ----------
-    catd : (S x E x T) array_like
+    data_cat : (S x E x T) array_like
         Input data time series
-    mmix : (C x T) array_like
+    mixing : (C x T) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data`
     mask : (S,) array_like
         Boolean mask array
-    comptable : (C x X) :obj:`pandas.DataFrame`
+    component_table : (C x X) :obj:`pandas.DataFrame`
         Component metric table. One row for each component, with a column for
         each metric. The index should be the component number.
     ref_img : :obj:`str` or img_like
@@ -709,13 +826,20 @@ def writeresults_echoes(catd, mmix, mask, comptable, io_generator):
                                              number ``echo``.
     =====================================    ===================================
     """
-    for i_echo in range(catd.shape[1]):
+    for i_echo in range(data_cat.shape[1]):
         LGR.info(f"Writing Kappa-filtered echo #{i_echo + 1:01d} timeseries")
-        write_split_ts(catd[:, i_echo, :], mmix, mask, comptable, io_generator, echo=(i_echo + 1))
+        write_split_ts(
+            data_cat[:, i_echo, :],
+            mixing,
+            mask,
+            component_table,
+            io_generator,
+            echo=(i_echo + 1),
+        )
 
 
 # File Loading Functions
-def load_data(data, n_echos=None):
+def load_data(data, n_echos=None, dummy_scans=0):
     """Coerce input `data` files to required 3D array output.
 
     Parameters
@@ -726,11 +850,14 @@ def load_data(data, n_echos=None):
     n_echos : :obj:`int`, optional
         Number of echos in provided data array. Only necessary if `data` is a single,
         z-concatenated file. Default: None
+    dummy_scans : :obj:`int`, optional
+        Number of dummy scans in the fMRI time series. Default: 0
 
     Returns
     -------
     fdata : (S x E x T) :obj:`numpy.ndarray`
         Output data where `S` is samples, `E` is echos, and `T` is time.
+        If dummy_scans is not 0, then those initial volumes are not returned with fdata
     ref_img : img_like
         Reference image object for saving output files.
     """
@@ -747,6 +874,12 @@ def load_data(data, n_echos=None):
                 raise TypeError(f"Unsupported type: {type(item)}")
 
         if len(data) == 1:  # a z-concatenated file was provided
+            LGR.warning(
+                "DEPRECATION WARNING: We are planning to deprecate supplying a single "
+                "z-concatenated data file at the end of 2026. "
+                "If you are using this option, "
+                "please comment on https://github.com/ME-ICA/tedana/issues/1313."
+            )
             data = data[0]
         elif len(data) == 2:  # inviable -- need more than 2 echos
             raise ValueError(f"Cannot run `tedana` with only two echos: {data}")
@@ -754,12 +887,21 @@ def load_data(data, n_echos=None):
             fdata = np.stack([utils.reshape_niimg(f) for f in data], axis=1)
             ref_img = check_niimg(data[0])
             ref_img.header.extensions = []
-            return np.atleast_3d(fdata), ref_img
+
+            fdata = np.atleast_3d(fdata)
+            if dummy_scans != 0:
+                fdata = fdata[..., dummy_scans:]
+
+            return fdata, ref_img
 
     # Z-concatenated file/img
     img = check_niimg(data)
     (nx, ny), nz = img.shape[:2], img.shape[2] // n_echos
     fdata = utils.reshape_niimg(img.get_fdata().reshape(nx, ny, nz, n_echos, -1, order="F"))
+
+    if dummy_scans != 0:
+        fdata = fdata[..., dummy_scans:]
+
     # create reference image
     ref_img = img.__class__(
         np.zeros((nx, ny, nz, 1)), affine=img.affine, header=img.header, extra=img.extra
@@ -803,19 +945,19 @@ def new_nii_like(ref_img, data, affine=None, copy_header=True):
     return nii
 
 
-def split_ts(data, mmix, mask, comptable):
+def split_ts(data, mixing, mask, component_table):
     """Split `data` time series into accepted component time series and remainder.
 
     Parameters
     ----------
     data : (S x T) array_like
         Input data, where `S` is samples and `T` is time
-    mmix : (T x C) array_like
+    mixing : (T x C) array_like
         Mixing matrix for converting input data to component space, where `C`
         is components and `T` is the same as in `data`
     mask : (S,) array_like
         Boolean mask array
-    comptable : (C x X) :obj:`pandas.DataFrame`
+    component_table : (C x X) :obj:`pandas.DataFrame`
         Component metric table. One row for each component, with a column for
         each metric. Requires at least two columns: "component" and
         "classification".
@@ -827,12 +969,12 @@ def split_ts(data, mmix, mask, comptable):
     resid : (S x T) :obj:`numpy.ndarray`
         Original data with `hikts` removed
     """
-    acc = comptable[comptable.classification == "accepted"].index.values
+    acc = component_table[component_table.classification == "accepted"].index.values
 
-    cbetas = get_coeffs(data - data.mean(axis=-1, keepdims=True), mmix, mask)
+    cbetas = get_coeffs(data - data.mean(axis=-1, keepdims=True), mixing, mask)
     betas = cbetas[mask]
     if len(acc) != 0:
-        hikts = utils.unmask(betas[:, acc].dot(mmix.T[acc, :]), mask)
+        hikts = utils.unmask(betas[:, acc].dot(mixing.T[acc, :]), mask)
     else:
         hikts = None
 

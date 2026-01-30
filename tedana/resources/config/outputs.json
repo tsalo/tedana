@@ -11,9 +11,33 @@
         "orig": "s0vG",
         "bidsv1.5.0": "S0map"
     },
+    "fit failures img": {
+        "orig": "fit_failures",
+        "bidsv1.5.0": "desc-decayFitFailures_mask"
+    },
+    "t2star variance img": {
+        "orig": "t2s_var",
+        "bidsv1.5.0": "stat-variance_desc-t2star_statmap"
+    },
+    "s0 variance img": {
+        "orig": "s0_var",
+        "bidsv1.5.0": "stat-variance_desc-s0_statmap"
+    },
+    "t2star-s0 covariance img": {
+        "orig": "t2s_s0_covar",
+        "bidsv1.5.0": "stat-covariance_desc-t2star+s0_statmap"
+    },
     "combined img": {
         "orig": "ts_OC",
         "bidsv1.5.0": "desc-optcom_bold"
+    },
+    "rmse img": {
+        "orig": "rmse",
+        "bidsv1.5.0": "desc-rmse_statmap"
+    },
+    "confounds tsv": {
+        "orig": "confounds",
+        "bidsv1.5.0": "desc-confounds_timeseries"
     },
     "ICA components img": {
         "orig": "ica_components",
@@ -202,10 +226,6 @@
     "ICA decision tree json": {
         "orig": "ica_decision_tree",
         "bidsv1.5.0": "desc-ICA_decision_tree"
-    },
-    "global signal time series tsv": {
-        "orig": "global_signal_ts",
-        "bidsv1.5.0": "desc-globalSignal_timeseries"
     },
     "ICA MIR mixing tsv": {
         "orig": "ica_mir_mixing",

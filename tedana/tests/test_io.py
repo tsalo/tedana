@@ -2,21 +2,23 @@
 
 import json
 import os
+from unittest import mock
 
 import nibabel as nib
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 
 from tedana import io as me
 from tedana.tests.test_utils import fnames, tes
-from tedana.tests.utils import get_test_data_path
+from tedana.tests.utils import data_for_testing_info, get_test_data_path
 
 data_dir = get_test_data_path()
 
 
 def test_new_nii_like():
-    data, ref = me.load_data(fnames, n_echos=len(tes))
+    data, ref = me.load_data(fnames, n_echos=len(tes), dummy_scans=0)
     nimg = me.new_nii_like(ref, data)
 
     assert isinstance(nimg, nib.Nifti1Image)
@@ -28,25 +30,31 @@ def test_load_data():
     exp_shape = (64350, 3, 5)
 
     # list of filepath to images
-    d, ref = me.load_data(fnames, n_echos=len(tes))
+    d, ref = me.load_data(fnames, n_echos=len(tes), dummy_scans=0)
     assert d.shape == exp_shape
     assert isinstance(ref, nib.Nifti1Image)
     assert np.allclose(ref.get_fdata(), nib.load(fnames[0]).get_fdata())
 
     # list of filepath to images *without n_echos*
-    d, ref = me.load_data(fnames)
+    d, ref = me.load_data(fnames, dummy_scans=0)
     assert d.shape == exp_shape
     assert isinstance(ref, nib.Nifti1Image)
     assert np.allclose(ref.get_fdata(), nib.load(fnames[0]).get_fdata())
 
+    # list of filepath to images *with dummy scans*
+    d, ref = me.load_data(fnames, dummy_scans=1)
+    assert d.shape == (exp_shape[0], exp_shape[1], exp_shape[2] - 1)
+    assert isinstance(ref, nib.Nifti1Image)
+    assert np.allclose(ref.get_fdata(), nib.load(fnames[0]).get_fdata())
+
     # list of img_like
-    d, ref = me.load_data(fimg, n_echos=len(tes))
+    d, ref = me.load_data(fimg, n_echos=len(tes), dummy_scans=0)
     assert d.shape == exp_shape
     assert isinstance(ref, nib.Nifti1Image)
     assert ref == fimg[0]
 
     # list of img_like *without n_echos*
-    d, ref = me.load_data(fimg)
+    d, ref = me.load_data(fimg, dummy_scans=0)
     assert d.shape == exp_shape
     assert isinstance(ref, nib.Nifti1Image)
     assert ref == fimg[0]
@@ -60,35 +68,35 @@ def test_load_data():
     # unsupported tuple of img_like
     fimg_tuple = tuple(fimg)
     with pytest.raises(TypeError):
-        d, ref = me.load_data(fimg_tuple, n_echos=len(tes))
+        d, ref = me.load_data(fimg_tuple, n_echos=len(tes), dummy_scans=0)
 
     # tuple of img_like *without n_echos*
     with pytest.raises(TypeError):
-        d, ref = me.load_data(fimg_tuple)
+        d, ref = me.load_data(fimg_tuple, dummy_scans=0)
 
     # two echos should raise value error
     with pytest.raises(ValueError):
-        me.load_data(fnames[:2])
+        me.load_data(fnames[:2], dummy_scans=0)
 
     # imagine z-cat img
-    d, ref = me.load_data(fnames[0], n_echos=3)
+    d, ref = me.load_data(fnames[0], n_echos=3, dummy_scans=0)
     assert d.shape == (21450, 3, 5)
     assert isinstance(ref, nib.Nifti1Image)
     assert ref.shape == (39, 50, 11, 1)
 
     # z-cat without n_echos should raise an error
     with pytest.raises(ValueError):
-        me.load_data(fnames[0])
+        me.load_data(fnames[0], dummy_scans=0)
 
     # imagine z-cat img in list
-    d, ref = me.load_data(fnames[:1], n_echos=3)
+    d, ref = me.load_data(fnames[:1], n_echos=3, dummy_scans=0)
     assert d.shape == (21450, 3, 5)
     assert isinstance(ref, nib.Nifti1Image)
     assert ref.shape == (39, 50, 11, 1)
 
     # z-cat in list without n_echos should raise an error
     with pytest.raises(ValueError):
-        me.load_data(fnames[:1])
+        me.load_data(fnames[:1], dummy_scans=0)
 
 
 # SMOKE TESTS
@@ -100,12 +108,12 @@ def test_smoke_split_ts():
 
     Note: classification is ["accepted", "rejected", "ignored"].
     """
-    np.random.seed(0)  # seeded because comptable MUST have accepted components
+    np.random.seed(0)  # seeded because component_table MUST have accepted components
     n_samples = 100
     n_times = 20
     n_components = 6
     data = np.random.random((n_samples, n_times))
-    mmix = np.random.random((n_times, n_components))
+    mixing = np.random.random((n_times, n_components))
     mask = np.random.randint(2, size=n_samples)
 
     # creating the component table with component as random floats,
@@ -114,9 +122,9 @@ def test_smoke_split_ts():
     metric = np.random.random(n_components)
     classification = np.random.choice(["accepted", "rejected", "ignored"], n_components)
     df_data = np.column_stack((component, metric, classification))
-    comptable = pd.DataFrame(df_data, columns=["component", "metric", "classification"])
+    component_table = pd.DataFrame(df_data, columns=["component", "metric", "classification"])
 
-    hikts, resid = me.split_ts(data, mmix, mask, comptable)
+    hikts, resid = me.split_ts(data, mixing, mask, component_table)
 
     assert hikts is not None
     assert resid is not None
@@ -130,7 +138,7 @@ def test_smoke_write_split_ts():
     np.random.seed(0)  # at least one accepted and one rejected, thus all files are generated
     n_samples, n_times, n_components = 64350, 10, 6
     data = np.random.random((n_samples, n_times))
-    mmix = np.random.random((n_times, n_components))
+    mixing = np.random.random((n_times, n_components))
     mask = np.random.randint(2, size=n_samples)
     ref_img = os.path.join(data_dir, "mask.nii.gz")
     # ref_img has shape of (39, 50, 33) so data is 64350 (39*33*50) x 10
@@ -141,10 +149,10 @@ def test_smoke_write_split_ts():
     metric = np.random.random(n_components)
     classification = np.random.choice(["accepted", "rejected", "ignored"], n_components)
     df_data = np.column_stack((component, metric, classification))
-    comptable = pd.DataFrame(df_data, columns=["component", "metric", "classification"])
+    component_table = pd.DataFrame(df_data, columns=["component", "metric", "classification"])
     io_generator.verbose = True
 
-    me.write_split_ts(data, mmix, mask, comptable, io_generator)
+    me.write_split_ts(data, mixing, mask, component_table, io_generator)
 
     # TODO: midk_ts.nii is never generated?
     fn = io_generator.get_name
@@ -156,7 +164,7 @@ def test_smoke_write_split_ts():
 
     io_generator.verbose = False
 
-    me.write_split_ts(data, mmix, mask, comptable, io_generator)
+    me.write_split_ts(data, mixing, mask, component_table, io_generator)
 
     # TODO: midk_ts.nii is never generated?
     fn = io_generator.get_name
@@ -277,7 +285,7 @@ def test_fname_to_component_list():
 
 
 def test_fname_to_component_list_empty_file():
-    """Test for testing empty files in fname_to_component_list function"""
+    """Test for testing empty files in fname_to_component_list function."""
     temp_csv_fname = os.path.join(data_dir, "test.csv")
     with open(temp_csv_fname, "w"):
         pass
@@ -318,3 +326,114 @@ def test_custom_encoder():
     encoded = json.dumps(test_data, cls=me.CustomEncoder)
     decoded = json.loads(encoded)
     assert test_data == decoded
+
+
+@mock.patch("tedana.io.requests.get")
+@mock.patch("tedana.io.op.isfile")
+def test_download_json_file_not_found(mock_isfile, mock_requests_get):
+    """Test case when file doesn't exist locally or on figshare."""
+    mock_isfile.return_value = False
+
+    mock_response = mock.Mock()
+    mock_response.raise_for_status = mock.Mock()
+    mock_response.json.return_value = {"files": [{"name": "tree.json", "download_url": "url.com"}]}
+    mock_requests_get.return_value = mock_response
+
+    result = me.download_json("non_existent_tree", "some_dir")
+
+    assert result is None
+    mock_response.raise_for_status.assert_called_once()
+
+
+@mock.patch("tedana.io.requests.get")
+@mock.patch("tedana.io.op.isfile")
+def test_download_json_skips_if_exists(mock_isfile, mock_requests_get):
+    """Test case when file already exists locally."""
+    mock_isfile.return_value = True
+
+    result = me.download_json("my_tree", "some_dir")
+
+    assert result == "some_dir/my_tree.json"
+    mock_requests_get.assert_not_called()
+
+
+@mock.patch("tedana.io.requests.get")
+def test_download_json_doesnt_connect_to_url(mock_requests_get, caplog: pytest.LogCaptureFixture):
+    """Tests that the correct log message appears when URL not connected."""
+    mock_requests_get.side_effect = requests.exceptions.ConnectionError(
+        "Simulated connection error"
+    )
+
+    result = me.download_json("tedana_orig", "./")
+    assert result is None
+    assert "Cannot connect to figshare" in caplog.text
+
+
+@mock.patch("tedana.io.requests.get")
+@mock.patch("tedana.io.op.isfile")
+def test_download_json_file_is_downloaded(mock_isfile, mock_requests_get):
+    """Test json is downloaded if it exists on figshare."""
+    mock_isfile.return_value = False
+
+    metadata_response = mock.Mock()
+    metadata_response.raise_for_status = mock.Mock()
+    metadata_response.json.return_value = {
+        "files": [{"name": "tree.json", "download_url": "url.com"}]
+    }
+
+    download_response = mock.Mock()
+    download_response.raise_for_status = mock.Mock()
+    file_content = {"sample": "data"}
+    download_response.content = json.dumps(file_content).encode("utf-8")
+
+    mock_requests_get.side_effect = [metadata_response, download_response]
+
+    out_dir = data_for_testing_info("path")
+    result = me.download_json("tree.json", out_dir)
+
+    assert result == f"{out_dir}/tree.json"
+    assert os.path.exists(result)
+
+    with open(result, "r") as f:
+        content = json.load(f)
+    assert content == file_content
+    os.remove(result)
+
+
+def test_add_dict_to_file():
+    """Test add_dict_to_file method for merging dictionaries into JSON files."""
+    ref_img = os.path.join(data_dir, "mask.nii.gz")
+    io_generator = me.OutputGenerator(ref_img, overwrite=True)
+
+    # Test 1: Create a new file when none exists
+    initial_data = {"key1": "value1", "key2": 42}
+    fname = io_generator.add_dict_to_file(initial_data, "ICA metrics json")
+    assert os.path.exists(fname)
+
+    with open(fname, "r") as f:
+        saved_data = json.load(f)
+    assert saved_data == initial_data
+
+    # Test 2: Merge new data into existing file
+    additional_data = {"key3": "value3", "key4": [1, 2, 3]}
+    fname = io_generator.add_dict_to_file(additional_data, "ICA metrics json")
+
+    with open(fname, "r") as f:
+        merged_data = json.load(f)
+    assert "key1" in merged_data
+    assert "key3" in merged_data
+    assert merged_data["key1"] == "value1"
+    assert merged_data["key3"] == "value3"
+    assert merged_data["key4"] == [1, 2, 3]
+
+    # Test 3: Update existing keys
+    update_data = {"key1": "updated_value"}
+    fname = io_generator.add_dict_to_file(update_data, "ICA metrics json")
+
+    with open(fname, "r") as f:
+        updated_data = json.load(f)
+    assert updated_data["key1"] == "updated_value"
+    assert updated_data["key3"] == "value3"  # Other keys preserved
+
+    # Cleanup
+    os.remove(fname)

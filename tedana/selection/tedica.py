@@ -2,8 +2,6 @@
 
 import logging
 
-from tedana.metrics import collect
-
 LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
 
@@ -52,15 +50,16 @@ def automatic_selection(component_table, selector, **kwargs):
 
     .. _FAQ: faq.html
     """
-    LGR.info("Performing ICA component selection")
+    # TODO external_regressor_config was inputted in this function
+    LGR.info(f"Performing ICA component selection with tree: {selector.tree_name}")
 
     RepLGR.info(
         "\n\nNext, component selection was performed to identify BOLD (TE-dependent) and "
         "non-BOLD (TE-independent) components using a decision tree."
     )
 
+    # TODO external_regressor_config=external_regressor_config, was here
     component_table["classification_tags"] = ""
     selector.select(component_table, cross_component_metrics=kwargs)
-    selector.metadata_ = collect.get_metadata(selector.component_table_)
 
     return selector
