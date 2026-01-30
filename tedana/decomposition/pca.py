@@ -216,7 +216,6 @@ def tedpca(
     else:
         # Z-score the data otherwise
         data = standardize_signal(data.T, detrend=True, standardize="zscore_sample").T
-        data = (data - data.mean()) / data.std()  # var normalize everything
 
     if algorithm in ["mdl", "aic", "kic"]:
         data_img = io.new_nii_like(io_generator.reference_img, utils.unmask(data, mask))
