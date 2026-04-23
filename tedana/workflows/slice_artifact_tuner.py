@@ -297,14 +297,16 @@ def tune_slice_artifact_workflow(
         mask_arr = _derive_mask(component_data)
         mask_img = nb.Nifti1Image(mask_arr.astype(np.uint8), component_img.affine)
     else:
-        mask_img = nb.load(mask_path)
-        mask_arr = np.asanyarray(mask_img.dataobj).astype(bool)
+        input_mask_img = nb.load(mask_path)
+        mask_arr = np.asanyarray(input_mask_img.dataobj).astype(bool)
         if mask_arr.shape != component_data.shape[:3]:
             raise ValueError(
                 "Mask shape {} does not match component map shape {}".format(
                     mask_arr.shape, component_data.shape[:3]
                 )
             )
+        # Force a binary mask image for nilearn masking utilities.
+        mask_img = nb.Nifti1Image(mask_arr.astype(np.uint8), input_mask_img.affine)
 
     metric_callable = _load_metric_function(metric_function)
     axis = _determine_slice_axis(component_img, override=slice_axis)

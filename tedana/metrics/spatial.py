@@ -47,28 +47,38 @@ def calculate_slice_artifact(
     slice_artifact = np.zeros(n_comps)
     for i_comp in range(n_comps):
         comp_map = betas_arr[..., i_comp]
-        slice_means = []
-        within_slice_vars = []
+        comp_vals_abs = np.abs(comp_map[mask_arr])
+        if comp_vals_abs.size == 0:
+            continue
+        high_value_threshold = np.percentile(comp_vals_abs, 85)
+        slice_centers = []
+        within_slice_scales = []
         for i_slice in range(comp_map.shape[slice_axis]):
             slice_mask = np.take(mask_arr, i_slice, axis=slice_axis)
             if not np.any(slice_mask):
                 continue
 
             slice_vals = np.take(comp_map, i_slice, axis=slice_axis)[slice_mask]
-            slice_means.append(slice_vals.mean())
+            slice_vals = np.abs(slice_vals)
+            high_slice_vals = slice_vals[slice_vals >= high_value_threshold]
+            if high_slice_vals.size >= 4:
+                slice_vals = high_slice_vals
+            slice_center = np.median(slice_vals)
+            slice_centers.append(slice_center)
             if slice_vals.size > 1:
-                within_slice_vars.append(slice_vals.var())
+                mad = np.median(np.abs(slice_vals - slice_center))
+                within_slice_scales.append(mad)
 
         # No informative slices or no adjacent-slice comparison can be made.
-        if len(slice_means) < 2:
+        if len(slice_centers) < 2:
             continue
 
-        slice_means = np.asarray(slice_means)
-        between_adjacent = np.mean(np.diff(slice_means) ** 2)
-        within_slice = np.mean(within_slice_vars) if within_slice_vars else 0.0
+        slice_centers = np.asarray(slice_centers)
+        between_adjacent = np.mean(np.diff(slice_centers) ** 2)
+        within_slice = np.mean(np.square(within_slice_scales)) if within_slice_scales else 0.0
 
-        # Higher values indicate stronger striping by slice:
-        # adjacent-slice jumps dominate over in-slice variability.
+        # Higher values indicate stronger striping by slice where adjacent-slice
+        # jumps are large compared to within-slice variation.
         denom = within_slice + np.finfo(float).eps
         slice_artifact[i_comp] = between_adjacent / denom
 
