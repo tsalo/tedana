@@ -21,6 +21,10 @@
             "map weight",
             "map weight clusterized"
         ],
+        "slice artifact": [
+            "map optcom betas",
+            "mask"
+        ],
         "countsigFT2": [
             "map FT2 clusterized"
         ],

@@ -10,7 +10,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from tedana import io, utils
-from tedana.metrics import dependence, external
+from tedana.metrics import dependence, external, spatial
 from tedana.metrics._utils import (
     add_external_dependencies,
     dependency_resolver,
@@ -393,6 +393,17 @@ def generate_metrics(
             proportion_threshold=proportion_threshold,
         )
 
+    if "slice artifact" in required_metrics:
+        LGR.info("Calculating slice artifact metric from component weight maps")
+        slice_axis = mask_img.header.get_dim_info()[2]
+        if slice_axis is None:
+            slice_axis = 2
+        component_table["slice artifact"] = spatial.calculate_slice_artifact(
+            betas=metric_maps["map optcom betas"],
+            mask_img=mask_img,
+            slice_axis=slice_axis,
+        )
+
     # Composite metrics
     if "d_table_score" in required_metrics:
         LGR.info("Calculating decision table score")
@@ -484,6 +495,7 @@ def generate_metrics(
         "dice_FT2",
         "dice_FS0",
         "countnoise",
+        "slice artifact",
         "signal-noise_t",
         "signal-noise_z",
         "signal-noise_p",
@@ -650,6 +662,15 @@ def get_metadata(component_table: pd.DataFrame) -> Dict:
                 "component, but not from clusters) from each component."
             ),
             "Units": "voxel",
+        }
+    if "slice artifact" in component_table:
+        metric_metadata["slice artifact"] = {
+            "LongName": "Slice artifact index",
+            "Description": (
+                "Ratio of adjacent-slice mean discontinuity to within-slice variance "
+                "in component weight maps. Larger values indicate stronger slice-wise striping."
+            ),
+            "Units": "arbitrary",
         }
     if "signal-noise_t" in component_table:
         metric_metadata["signal-noise_t"] = {

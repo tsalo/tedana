@@ -78,6 +78,7 @@ all = ["tedana[dev,doc,tests]"]
 ica_reclassify = "tedana.workflows.ica_reclassify:_main"
 t2smap = "tedana.workflows.t2smap:_main"
 tedana = "tedana.workflows.tedana:_main"
+tedana_component_browser = "tedana.workflows.component_browser:_main"
 
 #
 # Hatch configurations

@@ -9,7 +9,7 @@ import pytest
 from nilearn.masking import unmask
 
 from tedana import io, utils
-from tedana.metrics import collect, dependence, external
+from tedana.metrics import collect, dependence, external, spatial
 from tedana.metrics._utils import flip_components
 from tedana.tests.test_external_metrics import (
     sample_external_regressor_config,
@@ -60,6 +60,7 @@ def test_smoke_generate_metrics(testdata1):
         "dice_FT2",
         "dice_FS0",
         "signal-noise_t",
+        "slice artifact",
         "variance explained",
         "normalized variance explained",
         "marginal R-squared",
@@ -108,6 +109,7 @@ def test_smoke_generate_metrics(testdata1):
         np.round(flip_components(new_mixing, signs=component_table["optimal sign"].to_numpy()), 4),
         np.round(testdata1["mixing"], 4),
     )
+    assert "slice artifact" in component_table.columns
 
 
 def test_generate_metrics_fails(testdata1):
@@ -391,6 +393,35 @@ def test_smoke_compute_kappa_rho_difference():
         rho=rho,
     )
     assert kappa_rho_difference.shape == (n_components,)
+
+
+def test_calculate_slice_artifact():
+    """Test slice artifact metric sensitivity to slice-wise striping."""
+    rng = np.random.default_rng(0)
+    shape = (4, 4, 4)
+    n_components = 2
+
+    mask_arr = np.ones(shape, dtype=bool)
+    mask_img = nb.Nifti1Image(mask_arr.astype(np.uint8), np.eye(4))
+
+    maps = np.zeros(shape + (n_components,), dtype=float)
+    # Component 0 has clear alternating slice offsets and very low in-slice variance.
+    for i_slice in range(shape[2]):
+        maps[:, :, i_slice, 0] = (1 if i_slice % 2 == 0 else -1) + 0.01 * rng.normal(
+            size=shape[:2]
+        )
+    # Component 1 has spatially random values with less slice structure.
+    maps[:, :, :, 1] = rng.normal(size=shape)
+
+    betas = maps[mask_arr, :]
+    slice_artifact = spatial.calculate_slice_artifact(
+        betas=betas,
+        mask_img=mask_img,
+        slice_axis=2,
+    )
+
+    assert slice_artifact.shape == (n_components,)
+    assert slice_artifact[0] > slice_artifact[1]
 
 
 def test_smoke_calculate_dependence_metrics():

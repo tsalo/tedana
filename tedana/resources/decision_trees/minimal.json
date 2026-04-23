@@ -10,7 +10,8 @@
         "dice_FS0",
         "dice_FT2",
         "signal-noise_t",
-        "variance explained"
+        "variance explained",
+        "slice artifact"
     ],
     "intermediate_classifications": ["provisionalaccept", "provisionalreject"],
     "classification_tags": ["Likely BOLD", "Unlikely BOLD", "Low variance"],

@@ -20,6 +20,7 @@ def test_get_metadata():
             "dice_FT2": [0.8, 0.7],
             "dice_FS0": [0.6, 0.5],
             "countnoise": [10, 5],
+            "slice artifact": [1.5, 0.9],
             "signal-noise_t": [3.0, 4.0],
             "signal-noise_p": [0.01, 0.001],
             "d_table_score": [5.0, 3.0],
@@ -48,6 +49,7 @@ def test_get_metadata():
     assert "dice_FT2" in metadata
     assert "dice_FS0" in metadata
     assert "countnoise" in metadata
+    assert "slice artifact" in metadata
     assert "signal-noise_t" in metadata
     assert "signal-noise_p" in metadata
     assert "d_table_score" in metadata
