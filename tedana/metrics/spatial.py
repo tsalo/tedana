@@ -42,7 +42,7 @@ def calculate_slice_artifact(
         raise ValueError(f"mask_img must be three-dimensional. Received shape {mask_arr.shape}.")
 
     n_comps = betas.shape[1]
-    betas_img = masking.unmask(betas, mask_img)
+    betas_img = masking.unmask(betas.T, mask_img)
     betas_arr = np.asanyarray(betas_img.dataobj)
     slice_artifact = np.zeros(n_comps)
     for i_comp in range(n_comps):
