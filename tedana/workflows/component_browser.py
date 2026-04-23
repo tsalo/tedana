@@ -96,6 +96,16 @@ def _get_run_prefix(metrics_path: Path) -> str:
     return ""
 
 
+def _default_annotations_out_path(metrics_path: Path) -> Path:
+    """Build the default annotation output path from metrics path prefix."""
+    run_prefix = _get_run_prefix(metrics_path)
+    if run_prefix:
+        filename = f"{run_prefix}_slice_artifact_annotations.tsv"
+    else:
+        filename = "slice_artifact_annotations.tsv"
+    return metrics_path.parent / filename
+
+
 def _collect_component_figures(figures_dir: Path, run_prefix: str) -> Dict[int, Path]:
     """Map component index to static figure path."""
     if run_prefix:
@@ -485,6 +495,7 @@ def component_browser_workflow(
     metrics_path = Path(metrics_tsv).expanduser().resolve()
     if not metrics_path.exists():
         raise ValueError(f"Metrics TSV does not exist: {metrics_path}")
+    run_prefix = _get_run_prefix(metrics_path)
 
     if figures_dir is None:
         figures_path = metrics_path.parent / "figures"
@@ -494,7 +505,7 @@ def component_browser_workflow(
         raise ValueError(f"Figures directory does not exist: {figures_path}")
 
     if annotations_out is None:
-        annotations_out_path = metrics_path.parent / "slice_artifact_annotations.tsv"
+        annotations_out_path = _default_annotations_out_path(metrics_path)
     else:
         annotations_out_path = Path(annotations_out).expanduser().resolve()
 
@@ -504,8 +515,6 @@ def component_browser_workflow(
         annotations_in_path = annotations_out_path
     else:
         annotations_in_path = None
-
-    run_prefix = _get_run_prefix(metrics_path)
 
     component_table = pd.read_table(metrics_path)
     if "Component" not in component_table.columns:

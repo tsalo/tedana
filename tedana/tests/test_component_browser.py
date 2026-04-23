@@ -6,6 +6,7 @@ import pandas as pd
 
 from tedana.workflows.component_browser import (
     ANNOTATION_COLUMN,
+    _default_annotations_out_path,
     _build_annotation_export_table,
     _build_sorted_components,
     _collect_component_figures,
@@ -77,6 +78,16 @@ def test_get_run_prefix():
     assert _get_run_prefix(prefixed) == "sub-01"
     assert _get_run_prefix(unprefixed) == ""
     assert _get_run_prefix(nonstandard) == ""
+
+
+def test_default_annotations_out_path():
+    """Default annotation output includes run prefix when present."""
+    prefixed = Path("/tmp/sub-01_desc-tedana_metrics.tsv")
+    unprefixed = Path("/tmp/desc-tedana_metrics.tsv")
+    assert _default_annotations_out_path(prefixed) == Path(
+        "/tmp/sub-01_slice_artifact_annotations.tsv"
+    )
+    assert _default_annotations_out_path(unprefixed) == Path("/tmp/slice_artifact_annotations.tsv")
 
 
 def test_build_sorted_components():
