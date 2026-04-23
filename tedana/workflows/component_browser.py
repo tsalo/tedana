@@ -87,11 +87,25 @@ def _get_numeric_metric_columns(component_table: pd.DataFrame) -> List[str]:
     return numeric_cols
 
 
-def _collect_component_figures(figures_dir: Path) -> Dict[int, Path]:
+def _get_run_prefix(metrics_path: Path) -> str:
+    """Extract run prefix from metrics file stem before '_desc-tedana'."""
+    stem = metrics_path.stem
+    token = "_desc-tedana"
+    if token in stem:
+        return stem.split(token, 1)[0]
+    return ""
+
+
+def _collect_component_figures(figures_dir: Path, run_prefix: str) -> Dict[int, Path]:
     """Map component index to static figure path."""
+    if run_prefix:
+        figure_pattern = re.compile(rf"^{re.escape(run_prefix)}_comp_(\d+)\.png$")
+    else:
+        figure_pattern = re.compile(r"^comp_(\d+)\.png$")
+
     figures_by_index: Dict[int, Path] = {}
     for file_ in sorted(figures_dir.glob("*comp_*.png")):
-        match = re.search(r"comp_(\d+)\.png$", file_.name)
+        match = figure_pattern.match(file_.name)
         if not match:
             continue
         comp_idx = int(match.group(1))
@@ -491,6 +505,8 @@ def component_browser_workflow(
     else:
         annotations_in_path = None
 
+    run_prefix = _get_run_prefix(metrics_path)
+
     component_table = pd.read_table(metrics_path)
     if "Component" not in component_table.columns:
         raise ValueError("Metrics TSV must include a 'Component' column.")
@@ -507,9 +523,14 @@ def component_browser_workflow(
             f"Available metrics: {', '.join(metric_options)}"
         )
 
-    figures_by_index = _collect_component_figures(figures_path)
+    figures_by_index = _collect_component_figures(figures_path, run_prefix=run_prefix)
     if not figures_by_index:
-        raise ValueError(f"No component figures matching '*comp_*.png' found in {figures_path}")
+        raise ValueError(
+            "No component figures matching run prefix '{}' found in {}".format(
+                run_prefix,
+                figures_path,
+            )
+        )
 
     existing_annotations = {}
     if annotations_in_path is not None:

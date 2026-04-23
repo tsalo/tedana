@@ -6,11 +6,12 @@ import pandas as pd
 
 from tedana.workflows.component_browser import (
     ANNOTATION_COLUMN,
-    _build_sorted_components,
     _build_annotation_export_table,
+    _build_sorted_components,
     _collect_component_figures,
     _extract_component_index,
     _get_numeric_metric_columns,
+    _get_run_prefix,
     _load_existing_annotations,
     _write_annotation_table,
 )
@@ -48,11 +49,34 @@ def test_collect_component_figures(tmp_path: Path):
     (figures_dir / "sub-01_comp_002.png").touch()
     (figures_dir / "ignore.svg").touch()
 
-    mapping = _collect_component_figures(figures_dir)
+    mapping = _collect_component_figures(figures_dir, run_prefix="")
 
-    assert set(mapping.keys()) == {0, 2}
+    assert set(mapping.keys()) == {0}
     assert mapping[0].name == "comp_000.png"
-    assert mapping[2].name == "sub-01_comp_002.png"
+
+
+def test_collect_component_figures_with_run_prefix(tmp_path: Path):
+    """Only figures matching the run prefix are included."""
+    figures_dir = tmp_path / "figures"
+    figures_dir.mkdir()
+    (figures_dir / "sub-01_comp_001.png").touch()
+    (figures_dir / "sub-02_comp_001.png").touch()
+    (figures_dir / "comp_001.png").touch()
+
+    mapping = _collect_component_figures(figures_dir, run_prefix="sub-01")
+
+    assert set(mapping.keys()) == {1}
+    assert mapping[1].name == "sub-01_comp_001.png"
+
+
+def test_get_run_prefix():
+    """Run prefix is parsed from metrics TSV name."""
+    prefixed = Path("/tmp/sub-01_desc-tedana_metrics.tsv")
+    unprefixed = Path("/tmp/desc-tedana_metrics.tsv")
+    nonstandard = Path("/tmp/component_metrics.tsv")
+    assert _get_run_prefix(prefixed) == "sub-01"
+    assert _get_run_prefix(unprefixed) == ""
+    assert _get_run_prefix(nonstandard) == ""
 
 
 def test_build_sorted_components():
