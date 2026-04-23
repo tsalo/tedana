@@ -5,10 +5,14 @@ from pathlib import Path
 import pandas as pd
 
 from tedana.workflows.component_browser import (
+    ANNOTATION_COLUMN,
     _build_sorted_components,
+    _build_annotation_export_table,
     _collect_component_figures,
     _extract_component_index,
     _get_numeric_metric_columns,
+    _load_existing_annotations,
+    _write_annotation_table,
 )
 
 
@@ -75,3 +79,66 @@ def test_build_sorted_components():
         Path("comp_000.png"),
         Path("comp_001.png"),
     ]
+
+
+def test_build_annotation_export_table():
+    """Annotation export table includes labels and numeric helpers."""
+    component_table = pd.DataFrame(
+        {
+            "Component": ["ICA_00", "ICA_01", "ICA_02"],
+            "kappa": [5.0, 2.0, 9.0],
+        }
+    )
+    figures_by_index = {0: Path("comp_000.png"), 1: Path("comp_001.png"), 2: Path("comp_002.png")}
+    annotations = {"ICA_00": "1", "ICA_01": "Unclear"}
+
+    table = _build_annotation_export_table(
+        component_table=component_table,
+        figures_by_index=figures_by_index,
+        annotations=annotations,
+    )
+
+    assert ANNOTATION_COLUMN in table.columns
+    assert table.loc[table["Component"] == "ICA_00", ANNOTATION_COLUMN].item() == "1"
+    row_00 = table.loc[table["Component"] == "ICA_00"]
+    row_01 = table.loc[table["Component"] == "ICA_01"]
+    assert row_00["slice_artifact_annotation_numeric"].item() == 1.0
+    assert row_01["slice_artifact_annotation_unclear"].item() == 1
+    assert pd.isna(table.loc[table["Component"] == "ICA_02", ANNOTATION_COLUMN].item())
+
+
+def test_load_existing_annotations(tmp_path: Path):
+    """Existing annotations are loaded and filtered to supported labels."""
+    annotation_table = pd.DataFrame(
+        {
+            "Component": ["ICA_00", "ICA_01", "ICA_02"],
+            ANNOTATION_COLUMN: ["2", "Unclear", "bad-value"],
+        }
+    )
+    annotation_path = tmp_path / "annotations.tsv"
+    annotation_table.to_csv(annotation_path, sep="\t", index=False)
+
+    annotations = _load_existing_annotations(annotation_path)
+    assert annotations == {"ICA_00": "2", "ICA_01": "Unclear"}
+
+
+def test_write_annotation_table_csv_and_tsv(tmp_path: Path):
+    """Annotation writer supports csv and tsv output formats."""
+    annotation_table = pd.DataFrame(
+        {
+            "Component": ["ICA_00"],
+            ANNOTATION_COLUMN: ["5"],
+        }
+    )
+    out_tsv = tmp_path / "annotations.tsv"
+    out_csv = tmp_path / "annotations.csv"
+
+    _write_annotation_table(annotation_table, out_tsv)
+    _write_annotation_table(annotation_table, out_csv)
+
+    assert out_tsv.exists()
+    assert out_csv.exists()
+    reloaded_tsv = pd.read_table(out_tsv)
+    reloaded_csv = pd.read_csv(out_csv)
+    assert reloaded_tsv[ANNOTATION_COLUMN].item() == "5"
+    assert reloaded_csv[ANNOTATION_COLUMN].item() == "5"

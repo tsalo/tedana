@@ -79,6 +79,7 @@ ica_reclassify = "tedana.workflows.ica_reclassify:_main"
 t2smap = "tedana.workflows.t2smap:_main"
 tedana = "tedana.workflows.tedana:_main"
 tedana_component_browser = "tedana.workflows.component_browser:_main"
+tedana_slice_artifact_tune = "tedana.workflows.slice_artifact_tuner:_main"
 
 #
 # Hatch configurations
