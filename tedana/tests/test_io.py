@@ -157,6 +157,64 @@ def test_load_data_nilearn_multi_echo_fastpath(tmp_path):
     assert np.allclose(out, expected)
 
 
+def test_sort_echoes_reorders_echo_files_and_tes():
+    """Echo-specific files should be sorted by their associated echo times."""
+    data = ["echo2.nii.gz", "echo1.nii.gz", "echo3.nii.gz"]
+    tes = [39.0, 15.0, 63.0]
+
+    sorted_data, sorted_tes, echo_order = me.sort_echoes(data, tes)
+
+    assert sorted_data == ["echo1.nii.gz", "echo2.nii.gz", "echo3.nii.gz"]
+    assert sorted_tes == [15.0, 39.0, 63.0]
+    assert echo_order == [1, 0, 2]
+
+
+def test_sort_echoes_keeps_zcat_file_and_returns_echo_order():
+    """Z-concatenated files cannot be sorted by path, but their echo order is returned."""
+    data = ["zcat.nii.gz"]
+    tes = [39.0, 15.0, 63.0]
+
+    sorted_data, sorted_tes, echo_order = me.sort_echoes(data, tes)
+
+    assert sorted_data == data
+    assert sorted_tes == [15.0, 39.0, 63.0]
+    assert echo_order == [1, 0, 2]
+
+
+def test_sort_echoes_requires_data_and_tes_to_match():
+    """Echo-specific file count should match the number of echo times."""
+    with pytest.raises(ValueError, match="Number of echo-specific input files"):
+        me.sort_echoes(["echo1.nii.gz", "echo2.nii.gz"], [15.0, 39.0, 63.0])
+
+
+def test_load_data_nilearn_multi_echo_sorted_by_te(tmp_path):
+    """Sorted input paths should produce data ordered by ascending TE."""
+    affine = np.eye(4)
+    shape3d = (4, 3, 2)
+    n_vols = 5
+    n_echos = 2
+
+    mask_arr = np.zeros(shape3d, dtype=np.uint8)
+    mask_arr[0, 0, 0] = 1
+    mask_arr[1, 2, 1] = 1
+    mask_img = nb.Nifti1Image(mask_arr, affine)
+    mask_bool = mask_arr.astype(bool)
+
+    early_echo = np.full((*shape3d, n_vols), 15.0, dtype=np.float32)
+    late_echo = np.full((*shape3d, n_vols), 39.0, dtype=np.float32)
+    early_path = tmp_path / "echo1.nii.gz"
+    late_path = tmp_path / "echo2.nii.gz"
+    nb.Nifti1Image(early_echo, affine).to_filename(early_path)
+    nb.Nifti1Image(late_echo, affine).to_filename(late_path)
+
+    data, tes, _ = me.sort_echoes([str(late_path), str(early_path)], [39.0, 15.0])
+    out = me.load_data_nilearn(data, mask_img=mask_img, n_echos=n_echos, dtype=np.float32)
+
+    expected = np.stack([early_echo[mask_bool], late_echo[mask_bool]], axis=1)
+    assert tes == [15.0, 39.0]
+    assert np.allclose(out, expected)
+
+
 def test_load_data_nilearn_zcat_fastpath(tmp_path):
     """`load_data_nilearn` should support z-concatenated input (len(data)==1)."""
     affine = np.eye(4)
@@ -195,6 +253,64 @@ def test_load_data_nilearn_zcat_fastpath(tmp_path):
     assert np.allclose(out, expected)
 
 
+def test_load_data_nilearn_zcat_applies_echo_order(tmp_path):
+    """Z-concatenated echo slices should be sorted by echo order when requested."""
+    affine = np.eye(4)
+    x, y, n_z, n_vols, n_echos = 4, 3, 2, 5, 3
+    z_cat = n_z * n_echos
+
+    mask_arr = np.zeros((x, y, n_z), dtype=np.uint8)
+    mask_arr[0, 0, 0] = 1
+    mask_arr[1, 2, 1] = 1
+    mask_img = nb.Nifti1Image(mask_arr, affine)
+    mask_bool = mask_arr.astype(bool)
+
+    arr = np.zeros((x, y, z_cat, n_vols), dtype=np.float32)
+    values = [39.0, 15.0, 63.0]
+    for i_echo, value in enumerate(values):
+        arr[:, :, i_echo * n_z : (i_echo + 1) * n_z, :] = value
+
+    zcat_path = tmp_path / "zcat.nii.gz"
+    nb.Nifti1Image(arr, affine).to_filename(zcat_path)
+
+    _, tes, echo_order = me.sort_echoes([str(zcat_path)], values)
+    out = me.load_data_nilearn(
+        [str(zcat_path)],
+        mask_img=mask_img,
+        n_echos=n_echos,
+        dtype=np.float32,
+        echo_order=echo_order,
+    )
+
+    expected = []
+    for value in sorted(values):
+        expected.append(np.full((int(mask_bool.sum()), n_vols), value, dtype=np.float32))
+    expected = np.stack(expected, axis=1)
+    assert tes == sorted(values)
+    assert np.allclose(out, expected)
+
+
+def test_load_ref_img_zcat_applies_echo_order(tmp_path):
+    """Z-concatenated reference image should come from the first sorted echo."""
+    affine = np.eye(4)
+    x, y, n_z, n_vols, n_echos = 4, 3, 2, 5, 3
+    z_cat = n_z * n_echos
+
+    arr = np.zeros((x, y, z_cat, n_vols), dtype=np.float32)
+    values = [39.0, 15.0, 63.0]
+    for i_echo, value in enumerate(values):
+        arr[:, :, i_echo * n_z : (i_echo + 1) * n_z, :] = value
+
+    zcat_path = tmp_path / "zcat.nii.gz"
+    nb.Nifti1Image(arr, affine).to_filename(zcat_path)
+
+    _, _, echo_order = me.sort_echoes([str(zcat_path)], values)
+    ref_img = me.load_ref_img([str(zcat_path)], n_echos=n_echos, echo_order=echo_order)
+
+    assert ref_img.shape == (x, y, n_z, n_vols)
+    assert np.allclose(ref_img.get_fdata(), 15.0)
+
+
 def test_load_data_nilearn_zcat_requires_4d(tmp_path):
     """Z-concatenated inputs must be 4D."""
     affine = np.eye(4)
@@ -205,6 +321,18 @@ def test_load_data_nilearn_zcat_requires_4d(tmp_path):
     nb.Nifti1Image(np.zeros(shape3d, dtype=np.float32), affine).to_filename(bad_path)
 
     with pytest.raises(ValueError, match="Expected 4D z-concatenated image"):
+        me.load_data_nilearn([str(bad_path)], mask_img=mask_img, n_echos=2, dtype=np.float32)
+
+
+def test_load_data_nilearn_zcat_requires_even_slices_per_echo(tmp_path):
+    """Z-concatenated inputs should divide evenly into echoes."""
+    affine = np.eye(4)
+    mask_img = nb.Nifti1Image(np.ones((4, 3, 2), dtype=np.uint8), affine)
+
+    bad_path = tmp_path / "zcat_bad.nii.gz"
+    nb.Nifti1Image(np.zeros((4, 3, 5, 5), dtype=np.float32), affine).to_filename(bad_path)
+
+    with pytest.raises(ValueError, match="not evenly divisible"):
         me.load_data_nilearn([str(bad_path)], mask_img=mask_img, n_echos=2, dtype=np.float32)
 
 

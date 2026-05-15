@@ -569,6 +569,47 @@ def load_json(path: str) -> dict:
     return data
 
 
+def sort_echoes(data, tes):
+    """Sort echo-specific inputs and echo times by ascending echo time.
+
+    Parameters
+    ----------
+    data : list of str
+        List of paths to input files. May only have one element for z-concatenated data.
+    tes : list
+        Echo times associated with data.
+
+    Returns
+    -------
+    data : list of str
+        Input files sorted by echo time. Z-concatenated inputs are returned unchanged.
+    tes : list
+        Echo times sorted in ascending order.
+    echo_order : list of int
+        Original echo indices ordered by ascending echo time.
+    """
+    if len(tes) == 0:
+        raise ValueError("At least one echo time must be provided.")
+
+    echo_order = np.argsort(tes, kind="stable").tolist()
+    sorted_tes = [tes[idx] for idx in echo_order]
+
+    if len(data) == 1:
+        sorted_data = data
+    else:
+        if len(data) != len(tes):
+            raise ValueError(
+                f"Number of echo-specific input files ({len(data)}) does not match "
+                f"number of echo times ({len(tes)})."
+            )
+        sorted_data = [data[idx] for idx in echo_order]
+
+    if echo_order != list(range(len(tes))):
+        LGR.warning("Echo times were not in ascending order. Reordering echoes by echo time.")
+
+    return sorted_data, sorted_tes, echo_order
+
+
 def download_json(tree: str, out_dir: str) -> str:
     """Download a json file from figshare unless the file already exists.
 
@@ -1062,7 +1103,7 @@ def _infer_prefix(prefix):
     return prefix
 
 
-def load_data_nilearn(data, mask_img, n_echos, dtype=np.float32):
+def load_data_nilearn(data, mask_img, n_echos, dtype=np.float32, echo_order=None):
     """Load multi-echo data as a masked array.
 
     Parameters
@@ -1075,6 +1116,9 @@ def load_data_nilearn(data, mask_img, n_echos, dtype=np.float32):
         Number of echoes in the data
     dtype : numpy dtype, optional
         Dtype to load data as. Default is float32 for speed and memory.
+    echo_order : list of int or None, optional
+        Original echo indices ordered by ascending echo time. Primarily used to
+        sort echo slices from z-concatenated inputs.
 
     Returns
     -------
@@ -1087,6 +1131,16 @@ def load_data_nilearn(data, mask_img, n_echos, dtype=np.float32):
     (avoiding nilearn's check_niimg overhead). If that fails for any reason, it falls
     back to nilearn's `masking.apply_mask`.
     """
+    if echo_order is not None:
+        if len(echo_order) != n_echos:
+            raise ValueError(
+                f"Echo order length ({len(echo_order)}) does not match number of echoes "
+                f"({n_echos})."
+            )
+        echo_order = list(echo_order)
+        if sorted(echo_order) != list(range(n_echos)):
+            raise ValueError("Echo order must be a permutation of echo indices.")
+
     # Precompute mask boolean array once (C-order matches numpy boolean indexing semantics).
     mask_bool = np.asanyarray(mask_img.dataobj).astype(bool)
 
@@ -1109,11 +1163,16 @@ def load_data_nilearn(data, mask_img, n_echos, dtype=np.float32):
         )
         # z-cat data
         data_img = _convert_to_nifti1(nb.load(data[0]))
+        if data_img.ndim != 4:
+            raise ValueError("Expected 4D z-concatenated image")
+        if data_img.shape[2] % n_echos != 0:
+            raise ValueError(
+                f"Z-concatenated image has {data_img.shape[2]} z-slices, which is not evenly "
+                f"divisible by the number of echoes ({n_echos})."
+            )
         n_z = data_img.shape[2] // n_echos
         # Load full z-concatenated data once, then slice per echo in numpy.
         arr = np.asarray(data_img.dataobj, dtype=dtype)
-        if arr.ndim != 4:
-            raise ValueError("Expected 4D z-concatenated image")
         masked = []
         for i_echo in range(n_echos):
             echo_arr = arr[:, :, i_echo * n_z : (i_echo + 1) * n_z, :]
@@ -1121,8 +1180,17 @@ def load_data_nilearn(data, mask_img, n_echos, dtype=np.float32):
                 # Fall back if mask doesn't match slice shape for any reason
                 raise ValueError("Z-cat echo slice/mask shape mismatch")
             masked.append(echo_arr[mask_bool])
+        if echo_order is not None:
+            masked = [masked[idx] for idx in echo_order]
         return np.stack(masked, axis=1)
     else:
+        if len(data) != n_echos:
+            raise ValueError(
+                f"Number of echo-specific input files ({len(data)}) does not match "
+                f"number of echoes ({n_echos})."
+            )
+        if echo_order is not None:
+            data = [data[idx] for idx in echo_order]
         # Fast path: direct indexing (avoids nilearn overhead)
         try:
             masked = [_mask_4d(_convert_to_nifti1(nb.load(f))) for f in data]
@@ -1194,7 +1262,7 @@ def _convert_to_nifti1(img, dtype=None, max_dim=None):
     return new_img
 
 
-def load_ref_img(data, n_echos):
+def load_ref_img(data, n_echos, echo_order=None):
     """Load data using nibabel's load function and convert to NIfTI1 format.
 
     Parameters
@@ -1203,6 +1271,9 @@ def load_ref_img(data, n_echos):
         List of paths to input files
     n_echos : int
         Number of echoes in the data
+    echo_order : list of int or None, optional
+        Original echo indices ordered by ascending echo time. Primarily used to
+        choose the reference echo from z-concatenated inputs.
 
     Returns
     -------
@@ -1213,11 +1284,29 @@ def load_ref_img(data, n_echos):
     -----
     Images are converted to NIfTI1 format to ensure compatibility with nilearn functions.
     """
+    if echo_order is not None:
+        if len(echo_order) != n_echos:
+            raise ValueError(
+                f"Echo order length ({len(echo_order)}) does not match number of echoes "
+                f"({n_echos})."
+            )
+        echo_order = list(echo_order)
+        if sorted(echo_order) != list(range(n_echos)):
+            raise ValueError("Echo order must be a permutation of echo indices.")
+
     if len(data) == 1:
         # z-cat data
         data_img = _convert_to_nifti1(nb.load(data[0]))
+        if data_img.ndim != 4:
+            raise ValueError("Expected 4D z-concatenated image")
+        if data_img.shape[2] % n_echos != 0:
+            raise ValueError(
+                f"Z-concatenated image has {data_img.shape[2]} z-slices, which is not evenly "
+                f"divisible by the number of echoes ({n_echos})."
+            )
         n_z = data_img.shape[2] // n_echos
-        arr = data_img.slicer[:, :, :n_z, :].get_fdata()
+        ref_echo = 0 if echo_order is None else echo_order[0]
+        arr = data_img.slicer[:, :, ref_echo * n_z : (ref_echo + 1) * n_z, :].get_fdata()
         # Using slicer to create the image messes up the affine, so we need to create the
         # image manually. Use a header copy with dimensions updated to match the ref array,
         # since the original header describes the full z-concatenated volume.

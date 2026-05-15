@@ -65,8 +65,9 @@ def _get_parser():
         type=lambda x: is_valid_file(parser, x),
         help=(
             "Multi-echo dataset for analysis. "
-            "A set of echo-specific files in ascending order. "
-            "The TEs of the data should match the TEs listed in the -e argument."
+            "A set of echo-specific files. "
+            "The TEs of the data should match the TEs listed in the -e argument. "
+            "Echo-specific files will be sorted by their associated TEs."
         ),
         required=True,
     )
@@ -77,7 +78,7 @@ def _get_parser():
         metavar="TE",
         type=float,
         help=(
-            "Ascending echo times in seconds (per BIDS convention). E.g., 0.015 0.039 0.063. "
+            "Echo times in seconds (per BIDS convention). E.g., 0.015 0.039 0.063. "
             "Millisecond values (e.g., 15.0 39.0 63.0) are still accepted but deprecated."
         ),
         required=True,
@@ -462,7 +463,8 @@ def tedana_workflow(
     ----------
     data : :obj:`str` or :obj:`list` of :obj:`str`
         Either a single z-concatenated file (single-entry list or str) or a
-        list of echo-specific files, in ascending order.
+        list of echo-specific files. Echo-specific files will be sorted by
+        their associated TEs.
     tes : :obj:`list`
         List of echo times associated with data. Values should be in seconds
         per BIDS convention. Millisecond values are still accepted but deprecated.
@@ -651,12 +653,17 @@ def tedana_workflow(
     # For z-catted files, make sure it's a list of size 1
     if isinstance(data, str):
         data = [data]
+    data, tes, echo_order = io.sort_echoes(data, tes)
 
     LGR.info("Initializing and validating component selection tree")
     selector = ComponentSelector(tree, out_dir)
 
     # Initialize OutputGenerator with reference image
-    ref_img = io.load_ref_img(data=data, n_echos=n_echos)
+    ref_img = io.load_ref_img(
+        data=data,
+        n_echos=n_echos,
+        echo_order=echo_order if len(data) == 1 else None,
+    )
     io_generator = io.OutputGenerator(
         ref_img,
         convention=convention,
@@ -688,7 +695,12 @@ def tedana_workflow(
     io_generator.register_mask(mask_img)
 
     LGR.info(f"Loading input data: {[f for f in data]}")
-    data_cat = io.load_data_nilearn(data, mask_img=mask_img, n_echos=n_echos)
+    data_cat = io.load_data_nilearn(
+        data,
+        mask_img=mask_img,
+        n_echos=n_echos,
+        echo_order=echo_order if len(data) == 1 else None,
+    )
     if dummy_scans > 0:
         LGR.warning(f"Removing the first {dummy_scans} volumes as dummy scans.")
         data_cat = data_cat[..., dummy_scans:]
