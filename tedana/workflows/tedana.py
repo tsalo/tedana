@@ -914,10 +914,16 @@ def tedana_workflow(
             n_vols,
         )
 
-        # Patch keep_ratio into dec_keep_top_n node in the loaded tree
+        # Patch keep_ratio into dec_keep_top_n node in the loaded tree.
+        # keep_ratio lives in "kwargs" in the JSON, so patch there (not
+        # "parameters") to avoid passing the argument twice when the
+        # component selector unpacks both dicts.
         for node in selector.tree["nodes"]:
             if node.get("functionname") == "dec_keep_top_n":
-                node["parameters"]["keep_ratio"] = keep_ratio
+                if "kwargs" in node:
+                    node["kwargs"]["keep_ratio"] = keep_ratio
+                else:
+                    node["parameters"]["keep_ratio"] = keep_ratio
                 break
 
         selector = selection.automatic_selection(

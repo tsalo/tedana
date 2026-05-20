@@ -378,3 +378,71 @@ def test_dec_keep_top_n_only_used_metrics():
     selector = _make_selector([25.0])
     result = dec_keep_top_n(selector, "nochange", "rejected", "all", only_used_metrics=True)
     assert "te_peak" in result
+
+
+# ---------------------------------------------------------------------------
+# Integration test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("tensorly") is None,
+    reason="tensorly not installed",
+)
+def test_tensorly_workflow_end_to_end(tmp_path):
+    """Smoke test: tensorly backend runs workflow and produces key output files."""
+    import nibabel as nib
+    from tedana.workflows.tedana import tedana_workflow
+
+    # Build minimal 3-echo synthetic data files
+    rng = np.random.default_rng(0)
+    n_x, n_y, n_z, n_t = 5, 5, 3, 60
+    affine = np.eye(4)
+    affine[0, 0] = 2.0
+    affine[1, 1] = 2.0
+    affine[2, 2] = 2.0
+    affine[3, 3] = 2.0  # TR = 2 seconds
+    echo_times_s = [0.013, 0.028, 0.043]  # seconds (tedana convention)
+    data_files = []
+
+    for i, te in enumerate(echo_times_s):
+        # Simple T2*-weighted signal
+        signal = rng.standard_normal((n_x, n_y, n_z, n_t)) * np.exp(-te / 0.030) + 100
+        img = nib.Nifti1Image(signal.astype(np.float32), affine)
+        p = tmp_path / f"echo{i+1}.nii.gz"
+        nib.save(img, str(p))
+        data_files.append(str(p))
+
+    # Provide an explicit all-ones mask so compute_epi_mask is not called on
+    # pure-noise synthetic data (which would produce an empty mask).
+    mask_data = np.ones((n_x, n_y, n_z), dtype=np.uint8)
+    mask_img = nib.Nifti1Image(mask_data, affine)
+    mask_path = tmp_path / "mask.nii.gz"
+    nib.save(mask_img, str(mask_path))
+
+    tedana_workflow(
+        data=data_files,
+        tes=echo_times_s,
+        out_dir=str(tmp_path),
+        mask=str(mask_path),
+        ica_method="tensorly",
+        fittype="loglin",
+        fixed_seed=42,
+        verbose=False,
+        no_reports=True,
+    )
+
+    # Check key output files exist
+    assert (tmp_path / "desc-denoised_bold.nii.gz").exists()
+    assert (tmp_path / "desc-ICA_mixing.tsv").exists()
+    assert (tmp_path / "desc-ICA_smodes.tsv").exists()
+    # Component table is saved as desc-tedana_metrics.tsv
+    assert (tmp_path / "desc-tedana_metrics.tsv").exists()
+
+    # Check component table has expected columns
+    ct = pd.read_csv(tmp_path / "desc-tedana_metrics.tsv", sep="\t")
+    for col in ("te_peak", "freq_ratio", "variance_explained", "classification"):
+        assert col in ct.columns, f"Missing column in component table: {col}"
+
+    # All components classified
+    assert ct["classification"].isin(["accepted", "rejected"]).all()
