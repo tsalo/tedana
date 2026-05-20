@@ -146,7 +146,7 @@ def _tensorly_tica(data_cat, mask, echo_times, n_components=None, seed=42):
     s_modes = factors[2][:, :n_components_actual]
 
     spatial_maps = np.zeros((n_voxels, n_components_actual))
-    spatial_maps[mask, :spatial_rank] = factors[0][:, :n_components_actual]
+    spatial_maps[mask] = factors[0][:, :n_components_actual]
 
     return mixing, s_modes, spatial_maps
 

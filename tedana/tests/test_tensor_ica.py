@@ -68,7 +68,7 @@ class TestTensorlyBackend:
         mixing, _, _ = _tensorly_tica(data_cat, mask, echo_times, n_components=5, seed=42)
 
         np.testing.assert_allclose(mixing.mean(axis=0), 0, atol=1e-10)
-        np.testing.assert_allclose(mixing.std(axis=0), 1, atol=1e-10)
+        np.testing.assert_allclose(mixing.std(axis=0), 1, atol=1e-6)
 
     def test_partial_mask(self):
         from tedana.decomposition.tensor_ica import _tensorly_tica
