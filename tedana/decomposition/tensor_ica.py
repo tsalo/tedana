@@ -131,23 +131,23 @@ def _tensorly_tica(data_cat, mask, echo_times, n_components=None, seed=42):
     temporal_rank = min(n_components, n_timepoints)
     ranks = [spatial_rank, temporal_rank, echo_rank]
     _, factors = tucker(tensor, rank=ranks, random_state=seed)
-    # factors[0]: (n_masked, n_components)   — spatial
-    # factors[1]: (n_timepoints, n_components) — temporal
+    # factors[0]: (n_masked, spatial_rank)    — spatial
+    # factors[1]: (n_timepoints, temporal_rank) — temporal
     # factors[2]: (n_echoes, echo_rank)       — echo / TE-mode
 
-    # Maximise statistical independence of temporal components
-    ica = FastICA(n_components=n_components, random_state=seed, max_iter=500)
-    mixing_raw = ica.fit_transform(factors[1])  # (n_timepoints, n_components)
+    # Clamp n_components to the smallest rank so all outputs are consistent
+    n_components_actual = min(spatial_rank, temporal_rank, echo_rank)
+    ica = FastICA(n_components=n_components_actual, random_state=seed, max_iter=500)
+    mixing_raw = ica.fit_transform(factors[1][:, :n_components_actual])
 
     mixing = stats.zscore(mixing_raw, axis=0)
 
-    # Zero-pad echo factors to (n_echoes, n_components) for consistent output shape
-    s_modes_raw = factors[2]  # (n_echoes, echo_rank)
-    s_modes = np.zeros((n_echoes, n_components))
-    s_modes[:, :echo_rank] = s_modes_raw
+    # Zero-pad echo factors to (n_echoes, n_components_actual) for consistent output shape
+    s_modes = np.zeros((n_echoes, n_components_actual))
+    s_modes[:, :echo_rank] = factors[2]
 
-    spatial_maps = np.zeros((n_voxels, n_components))
-    spatial_maps[mask] = factors[0]
+    spatial_maps = np.zeros((n_voxels, n_components_actual))
+    spatial_maps[mask, :spatial_rank] = factors[0][:, :n_components_actual]
 
     return mixing, s_modes, spatial_maps
 

@@ -50,9 +50,16 @@ class TestTensorlyBackend:
             data_cat, mask, echo_times, n_components=n_components, seed=42
         )
 
-        assert mixing.shape == (n_timepoints, n_components)
-        assert s_modes.shape == (n_echoes, n_components)
-        assert spatial_maps.shape == (n_voxels, n_components)
+        # n_components_actual = min(spatial_rank, temporal_rank, echo_rank)
+        # echo_rank = min(n_echoes, n_components) = min(3, 5) = 3
+        n_components_actual = min(
+            min(n_components, mask.sum()),  # spatial_rank
+            min(n_components, n_timepoints),  # temporal_rank
+            min(n_echoes, n_components),  # echo_rank
+        )
+        assert mixing.shape == (n_timepoints, n_components_actual)
+        assert s_modes.shape == (n_echoes, n_components_actual)
+        assert spatial_maps.shape == (n_voxels, n_components_actual)
 
     def test_mixing_is_zscored(self):
         from tedana.decomposition.tensor_ica import _tensorly_tica
@@ -80,10 +87,19 @@ class TestTensorlyBackend:
     def test_n_components_default(self):
         from tedana.decomposition.tensor_ica import _tensorly_tica
 
-        data_cat, mask, echo_times = _make_data(n_timepoints=80)
+        n_voxels, n_echoes, n_timepoints = 200, 3, 80
+        data_cat, mask, echo_times = _make_data(n_voxels, n_echoes, n_timepoints)
         mixing, _, _ = _tensorly_tica(data_cat, mask, echo_times, n_components=None)
-        # default = min(50, 80 // 4) = 20
-        assert mixing.shape[1] == 20
+        # default n_components = min(50, 80 // 4) = 20
+        # n_components_actual = min(spatial_rank, temporal_rank, echo_rank)
+        # echo_rank = min(n_echoes, 20) = min(3, 20) = 3
+        n_components_default = max(1, min(50, n_timepoints // 4))
+        n_components_actual = min(
+            min(n_components_default, mask.sum()),
+            min(n_components_default, n_timepoints),
+            min(n_echoes, n_components_default),
+        )
+        assert mixing.shape[1] == n_components_actual
 
     def test_tensor_ica_dispatches_to_tensorly(self):
         from tedana.decomposition.tensor_ica import tensor_ica
@@ -95,6 +111,41 @@ class TestTensorlyBackend:
         assert mixing.ndim == 2
         assert s_modes.ndim == 2
         assert spatial_maps.ndim == 2
+
+    def test_few_masked_voxels_fewer_than_components(self):
+        """spatial_rank = n_masked < n_components should not crash."""
+        from tedana.decomposition.tensor_ica import _tensorly_tica
+
+        n_voxels, n_echoes, n_timepoints, n_components = 200, 3, 80, 5
+        data_cat, _, echo_times = _make_data(n_voxels, n_echoes, n_timepoints)
+        # Only 3 voxels in mask — fewer than n_components=5
+        mask = np.zeros(n_voxels, dtype=bool)
+        mask[:3] = True
+
+        mixing, s_modes, spatial_maps = _tensorly_tica(
+            data_cat, mask, echo_times, n_components=n_components, seed=0
+        )
+
+        # All outputs should have the same number of components
+        n_comp_out = mixing.shape[1]
+        assert s_modes.shape[1] == n_comp_out
+        assert spatial_maps.shape[1] == n_comp_out
+        assert spatial_maps.shape[0] == n_voxels
+
+    def test_few_timepoints_fewer_than_components(self):
+        """temporal_rank = n_timepoints < n_components should not crash."""
+        from tedana.decomposition.tensor_ica import _tensorly_tica
+
+        n_voxels, n_echoes, n_timepoints, n_components = 200, 3, 4, 10
+        data_cat, mask, echo_times = _make_data(n_voxels, n_echoes, n_timepoints)
+
+        mixing, s_modes, spatial_maps = _tensorly_tica(
+            data_cat, mask, echo_times, n_components=n_components, seed=0
+        )
+
+        n_comp_out = mixing.shape[1]
+        assert s_modes.shape[1] == n_comp_out
+        assert spatial_maps.shape[1] == n_comp_out
 
 
 # ---------------------------------------------------------------------------
