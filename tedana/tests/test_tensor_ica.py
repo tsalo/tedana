@@ -1,5 +1,6 @@
 """Tests for tensor-ICA decomposition."""
 
+import importlib.util
 import shutil
 
 import numpy as np
@@ -34,7 +35,7 @@ def test_tensor_ica_raises_on_unknown_method():
 
 
 @pytest.mark.skipif(
-    not pytest.importorskip("tensorly", reason="tensorly not installed"),
+    importlib.util.find_spec("tensorly") is None,
     reason="tensorly not installed",
 )
 class TestTensorlyBackend:
