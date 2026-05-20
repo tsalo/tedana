@@ -888,10 +888,13 @@ def tedana_workflow(
     similarity_t_sne = None
     fastica_convergence_warning_count = None
 
+    # Default tensor-ICA reporting variables to None
+    _tica_s_modes = None
+    _tica_echo_times = None
+    _tica_spatial_maps = None
+
     if ica_method in ("tensorly", "fsl"):
         # --- Tensor-ICA path ---
-        _tica_s_modes = None  # for reporting
-        _tica_echo_times = None
 
         mixing, s_modes, spatial_maps = decomposition.tensor_ica(
             data_cat,
@@ -946,6 +949,7 @@ def tedana_workflow(
         # Store for reporting
         _tica_s_modes = s_modes
         _tica_echo_times = tes
+        _tica_spatial_maps = spatial_maps
 
         # Per-echo denoising → optimal combination
         # Note: t2s_full may be deleted before this branch; use t2s_limited
@@ -1273,13 +1277,24 @@ def tedana_workflow(
             io_generator=io_generator,
             gscontrol=gscontrol,
         )
-        reporting.static_figures.comp_figures(
-            data_optcom,
-            component_table=component_table,
-            mixing=mixing_orig,
-            io_generator=io_generator,
-            png_cmap=png_cmap,
-        )
+        if _tica_s_modes is not None:
+            reporting.static_figures.tensor_comp_figures(
+                spatial_maps=_tica_spatial_maps,
+                component_table=component_table,
+                mixing=mixing_orig,
+                s_modes=_tica_s_modes,
+                echo_times=[te * 1000 for te in _tica_echo_times],
+                io_generator=io_generator,
+                png_cmap=png_cmap,
+            )
+        else:
+            reporting.static_figures.comp_figures(
+                data_optcom,
+                component_table=component_table,
+                mixing=mixing_orig,
+                io_generator=io_generator,
+                png_cmap=png_cmap,
+            )
         reporting.static_figures.plot_t2star_and_s0(
             io_generator=io_generator,
             mask=mask_denoise_img,

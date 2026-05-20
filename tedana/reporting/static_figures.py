@@ -333,6 +333,207 @@ def plot_component(
     plt.close(fig)
 
 
+def plot_tensor_component(
+    *,
+    stat_img,
+    component_timeseries,
+    power_spectrum,
+    frequencies,
+    s_mode,
+    echo_times,
+    tr,
+    classification_color,
+    png_cmap,
+    title,
+    out_file,
+):
+    """Create a 4-panel figure for tensor-ICA components.
+
+    Like :func:`plot_component` but adds a TE-mode distribution panel showing
+    S-mode loadings against echo times.
+
+    Parameters
+    ----------
+    stat_img : :obj:`nibabel.Nifti1Image`
+        Image of the component's spatial map.
+    component_timeseries : (T,) array_like
+        Time series of the component.
+    power_spectrum : (T,) array_like
+        Power spectrum of the component's time series.
+    frequencies : (T,) array_like
+        Frequencies for the power spectrum.
+    s_mode : (n_echoes,) array_like
+        TE-mode loadings for this component.
+    echo_times : (n_echoes,) array_like
+        Echo times in milliseconds.
+    tr : :obj:`float`
+        Repetition time in seconds.
+    classification_color : :obj:`str`
+        Color for time series and TE distribution.
+    png_cmap : :obj:`str`
+        Colormap for spatial map.
+    title : :obj:`str`
+        Figure title.
+    out_file : :obj:`str`
+        Path to save the figure.
+    """
+    import matplotlib.image as mpimg
+    from matplotlib import gridspec
+
+    imgmax = 0.1 * np.max(np.abs(stat_img.get_fdata()))
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="A non-diagonal affine.*", category=UserWarning)
+        display = plotting.plot_stat_map(
+            stat_img,
+            bg_img=None,
+            display_mode="mosaic",
+            cut_coords=5,
+            vmax=imgmax,
+            cmap=png_cmap,
+            symmetric_cbar=True,
+            colorbar=False,
+            draw_cross=False,
+            annotate=False,
+            resampling_interpolation="nearest",
+        )
+
+    display.annotate(size=20)
+    example_ax = list(display.axes.values())[0]
+    nilearn_fig = example_ax.ax.figure
+
+    with BytesIO() as buf:
+        nilearn_fig.savefig(buf, format="png")
+        buf.seek(0)
+        img = mpimg.imread(buf)
+
+    plt.close(nilearn_fig)
+
+    width = 10
+    img_hw_ratio = img.shape[0] / img.shape[1]
+    img_dims = (width, (width * img_hw_ratio * 2.2))
+
+    fig = plt.figure(figsize=img_dims)
+    fig.suptitle(title, fontsize=14)
+    gs = gridspec.GridSpec(4, 1, height_ratios=[2, 10, 2, 2], hspace=0.3)
+
+    # Time series
+    ax_ts = fig.add_subplot(gs[0])
+    ax_ts.plot(component_timeseries, color=classification_color)
+    ax_ts.set_xlim(0, len(component_timeseries) - 1)
+    ax_ts.set_yticks([])
+    max_xticks = 10
+    xloc = plt.MaxNLocator(max_xticks)
+    ax_ts.xaxis.set_major_locator(xloc)
+    ax_ts2 = ax_ts.twiny()
+    ax1_xs = ax_ts.get_xticks()
+    ax2_xs = [round(x * tr, 2) for x in ax1_xs]
+    ax_ts2.set_xticks(ax1_xs)
+    ax_ts2.set_xlim(ax_ts.get_xbound())
+    ax_ts2.set_xticklabels(ax2_xs)
+    ax_ts2.set_xlabel("seconds")
+
+    # Spatial map
+    ax_map = fig.add_subplot(gs[1])
+    ax_map.axis("off")
+    ax_map.imshow(img)
+
+    # Power spectrum
+    ax_fft = fig.add_subplot(gs[2])
+    ax_fft.plot(frequencies, power_spectrum, color=classification_color)
+    ax_fft.set_title("One-Sided FFT")
+    ax_fft.set_xlabel("Frequency (Hz)")
+    ax_fft.set_xlim(0, frequencies.max())
+    ax_fft.set_yticks([])
+
+    # TE-mode distribution
+    ax_te = fig.add_subplot(gs[3])
+    ax_te.plot(echo_times, s_mode, "o-", color=classification_color)
+    ax_te.set_xlabel("Echo time (ms)")
+    ax_te.set_ylabel("S-mode loading")
+    ax_te.set_title("TE-mode distribution")
+
+    fig.savefig(out_file)
+    plt.close(fig)
+
+
+def tensor_comp_figures(
+    spatial_maps, component_table, mixing, s_modes, echo_times, io_generator, png_cmap
+):
+    """Create per-component figures for tensor-ICA, including a TE-mode distribution panel.
+
+    Parameters
+    ----------
+    spatial_maps : (n_voxels, n_components) :obj:`numpy.ndarray`
+        Spatial component maps in full brain space (indexed by the base mask).
+    component_table : :obj:`pandas.DataFrame`
+        Component metric table with columns: ``te_peak``, ``freq_ratio``,
+        ``variance_explained``, ``classification``, ``classification_tags``.
+    mixing : (n_timepoints, n_components) :obj:`numpy.ndarray`
+        Z-scored temporal mixing matrix.
+    s_modes : (n_echoes, n_components) :obj:`numpy.ndarray`
+        TE-mode loadings from tensor decomposition.
+    echo_times : (n_echoes,) array_like
+        Echo times in milliseconds.
+    io_generator : :obj:`tedana.io.OutputGenerator`
+        Output generator for saving figures.
+    png_cmap : :obj:`str`
+        Colormap for spatial maps.
+    """
+    # Get repetition time from reference image
+    tr = io_generator.reference_img.header.get_zooms()[-1]
+
+    # Unmask spatial maps to 4D NIfTI-compatible array using the base mask
+    # spatial_maps has shape (n_masked_voxels, n_components); unmask to full brain
+    component_maps_img = masking.unmask(spatial_maps.T, io_generator.mask)
+    component_maps_arr = component_maps_img.get_fdata()
+
+    echo_times_arr = np.asarray(echo_times)
+
+    for compnum in component_table.index.values:
+        if component_table.loc[compnum, "classification"] == "accepted":
+            line_color = "g"
+        elif component_table.loc[compnum, "classification"] == "rejected":
+            line_color = "r"
+        else:
+            line_color = "0.75"
+
+        expl_text = str(component_table.loc[compnum, "classification_tags"])
+        te_peak = component_table.loc[compnum, "te_peak"]
+        freq_ratio = component_table.loc[compnum, "freq_ratio"]
+        var_expl = component_table.loc[compnum, "variance_explained"]
+        plt_title = (
+            f"Comp. {compnum}: var_expl: {var_expl:.4f}, "
+            f"te_peak: {te_peak:.1f} ms, freq_ratio: {freq_ratio:.2f}, {expl_text}"
+        )
+
+        component_img = nb.Nifti1Image(
+            component_maps_arr[:, :, :, compnum],
+            affine=io_generator.reference_img.affine,
+            header=io_generator.reference_img.header,
+        )
+
+        component_timeseries = mixing[:, compnum]
+        spectrum, freqs = utils.get_spectrum(component_timeseries, tr)
+
+        plot_name = f"{io_generator.prefix}comp_{str(compnum).zfill(3)}.png"
+        compplot_name = os.path.join(io_generator.out_dir, "figures", plot_name)
+
+        plot_tensor_component(
+            stat_img=component_img,
+            component_timeseries=component_timeseries,
+            power_spectrum=spectrum,
+            frequencies=freqs,
+            s_mode=s_modes[:, compnum],
+            echo_times=echo_times_arr,
+            tr=tr,
+            classification_color=line_color,
+            png_cmap=png_cmap,
+            title=plt_title,
+            out_file=compplot_name,
+        )
+
+
 def comp_figures(ts, component_table, mixing, io_generator, png_cmap):
     """Create static figures that highlight certain aspects of tedana processing.
 
