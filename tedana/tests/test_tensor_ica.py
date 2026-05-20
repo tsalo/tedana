@@ -181,8 +181,11 @@ def test_fsl_rejects_incompatible_tedpca():
 
 
 def test_fsl_raises_when_melodic_missing(monkeypatch):
-    from tedana.decomposition import tensor_ica as tica_mod
+    import importlib
 
+    import tedana.decomposition.tensor_ica  # ensure module is in sys.modules
+
+    tica_mod = importlib.import_module("tedana.decomposition.tensor_ica")
     monkeypatch.setattr(tica_mod.shutil, "which", lambda _: None)
     from tedana.decomposition.tensor_ica import tensor_ica
 
@@ -216,3 +219,59 @@ def test_fsl_output_shapes(tmp_path):
     assert s_modes.shape[0] == n_echoes
     assert s_modes.shape[1] == mixing.shape[1]
     assert spatial_maps.shape == (n_voxels, mixing.shape[1])
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+
+def _make_metric_inputs(n_echoes=3, n_components=5, n_timepoints=100, n_voxels=200, seed=0):
+    rng = np.random.default_rng(seed)
+    s_modes = rng.standard_normal((n_echoes, n_components))
+    mixing = rng.standard_normal((n_timepoints, n_components))
+    spatial_maps = rng.standard_normal((n_voxels, n_components))
+    echo_times = np.array([13.0, 28.0, 43.0])
+    tr = 2.0
+    return s_modes, mixing, spatial_maps, echo_times, tr, n_timepoints
+
+
+def test_generate_tensor_metrics_shape_and_columns():
+    from tedana.metrics.tensor_ica import generate_tensor_metrics
+
+    s_modes, mixing, spatial_maps, echo_times, tr, n_vols = _make_metric_inputs()
+    n_components = mixing.shape[1]
+
+    ct = generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vols)
+
+    assert len(ct) == n_components
+    for col in ("te_peak", "freq_ratio", "variance_explained", "classification"):
+        assert col in ct.columns, f"Missing column: {col}"
+
+
+def test_freq_ratio_between_zero_and_one():
+    from tedana.metrics.tensor_ica import generate_tensor_metrics
+
+    s_modes, mixing, spatial_maps, echo_times, tr, n_vols = _make_metric_inputs()
+    ct = generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vols)
+
+    assert ct["freq_ratio"].between(0.0, 1.0).all(), "freq_ratio must be in [0, 1]"
+
+
+def test_variance_explained_sums_to_one():
+    from tedana.metrics.tensor_ica import generate_tensor_metrics
+
+    s_modes, mixing, spatial_maps, echo_times, tr, n_vols = _make_metric_inputs()
+    ct = generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vols)
+
+    np.testing.assert_allclose(ct["variance_explained"].sum(), 1.0, atol=1e-6)
+
+
+def test_te_peak_is_finite():
+    from tedana.metrics.tensor_ica import generate_tensor_metrics
+
+    s_modes, mixing, spatial_maps, echo_times, tr, n_vols = _make_metric_inputs()
+    ct = generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vols)
+
+    assert ct["te_peak"].notna().all()
+    assert np.isfinite(ct["te_peak"].values).all()

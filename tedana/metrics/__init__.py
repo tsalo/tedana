@@ -3,5 +3,6 @@
 """TE-dependence and TE-independence metrics."""
 
 from tedana.metrics.collect import generate_metrics
+from tedana.metrics.tensor_ica import generate_tensor_metrics
 
-__all__ = ["generate_metrics"]
+__all__ = ["generate_metrics", "generate_tensor_metrics"]

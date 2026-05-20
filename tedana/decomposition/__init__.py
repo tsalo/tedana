@@ -4,5 +4,6 @@
 
 from tedana.decomposition.ica import tedica
 from tedana.decomposition.pca import tedpca
+from tedana.decomposition.tensor_ica import tensor_ica
 
-__all__ = ["tedpca", "tedica"]
+__all__ = ["tedpca", "tedica", "tensor_ica"]
