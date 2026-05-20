@@ -97,6 +97,7 @@ API
    tedica
    ica.r_ica
    ica.f_ica
+   tensor_ica.tensor_ica
 
 
 .. _api_metrics_ref:
@@ -118,6 +119,7 @@ API
    collect
    dependence
    external
+   tensor_ica
 
 
 .. _api_selection_ref:

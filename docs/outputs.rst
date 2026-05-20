@@ -90,6 +90,12 @@ tedana_report.html                                                           The
                                                                              coefficients. Each map corresponds to the same
                                                                              component index in the mixing matrix and component table.
 "ICA decomposition json": desc-ICA_decomposition.json                        Metadata for the ICA decomposition.
+"ICA S-modes tsv": desc-ICA_smodes.tsv                                        TE-mode loadings matrix (n_echoes × n_components)
+                                                                             produced by tensor-ICA
+                                                                             (``--ica-method tensorly`` or ``--ica-method fsl``).
+                                                                             Contains the echo-time-dependent factor from the
+                                                                             Tucker decomposition, used by the ``tensor_ica``
+                                                                             decision tree for component classification.
 "ICA metrics tsv": desc-tedana_metrics.tsv                                   TEDICA component table. A BIDS Derivatives-compatible
                                                                              TSV file with summary metrics and inclusion/exclusion
                                                                              information for each component from the ICA
