@@ -107,7 +107,7 @@ def _tensorly_tica(data_cat, mask, echo_times, n_components=None, seed=42):
     n_voxels, n_echoes, n_timepoints = data_cat.shape
 
     if n_components is None:
-        n_components = min(50, n_timepoints // 4)
+        n_components = max(1, min(50, n_timepoints // 4))
 
     LGR.info(
         f"Running tensorly Tucker decomposition with {n_components} components "
@@ -124,9 +124,12 @@ def _tensorly_tica(data_cat, mask, echo_times, n_components=None, seed=42):
     tensor = tl.tensor(masked_data.transpose(0, 2, 1))  # (n_masked, n_timepoints, n_echoes)
 
     # Tucker rank for the echo mode is at most n_echoes; for spatial/temporal
-    # modes we use n_components directly.
+    # modes we clamp to available dimensions.
     echo_rank = min(n_echoes, n_components)
-    ranks = [n_components, n_components, echo_rank]
+    n_masked = mask.sum()
+    spatial_rank = min(n_components, n_masked)
+    temporal_rank = min(n_components, n_timepoints)
+    ranks = [spatial_rank, temporal_rank, echo_rank]
     _, factors = tucker(tensor, rank=ranks, random_state=seed)
     # factors[0]: (n_masked, n_components)   — spatial
     # factors[1]: (n_timepoints, n_components) — temporal

@@ -75,7 +75,7 @@ class TestTensorlyBackend:
         )
 
         assert spatial_maps.shape[0] == 200
-        assert spatial_maps[~mask].sum() == 0  # unmasked voxels stay zero
+        assert np.all(spatial_maps[~mask] == 0)  # unmasked voxels stay zero
 
     def test_n_components_default(self):
         from tedana.decomposition.tensor_ica import _tensorly_tica
