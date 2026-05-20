@@ -142,9 +142,8 @@ def _tensorly_tica(data_cat, mask, echo_times, n_components=None, seed=42):
 
     mixing = stats.zscore(mixing_raw, axis=0)
 
-    # Zero-pad echo factors to (n_echoes, n_components_actual) for consistent output shape
-    s_modes = np.zeros((n_echoes, n_components_actual))
-    s_modes[:, :echo_rank] = factors[2]
+    # Slice echo factors to (n_echoes, n_components_actual) for consistent output shape
+    s_modes = factors[2][:, :n_components_actual]
 
     spatial_maps = np.zeros((n_voxels, n_components_actual))
     spatial_maps[mask, :spatial_rank] = factors[0][:, :n_components_actual]

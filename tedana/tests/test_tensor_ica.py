@@ -147,6 +147,25 @@ class TestTensorlyBackend:
         assert s_modes.shape[1] == n_comp_out
         assert spatial_maps.shape[1] == n_comp_out
 
+    def test_many_echoes_spatial_bottleneck(self):
+        """When spatial_rank is the bottleneck (n_masked < n_echoes < n_components)."""
+        from tedana.decomposition.tensor_ica import _tensorly_tica
+
+        n_voxels, n_echoes, n_timepoints, n_components = 200, 5, 80, 8
+        data_cat, _, echo_times = _make_data(n_voxels, n_echoes, n_timepoints, seed=1)
+        echo_times = np.array([13.0, 21.0, 29.0, 37.0, 45.0])  # 5 echoes
+        # 3 masked voxels — spatial_rank=3 is bottleneck below n_echoes=5
+        mask = np.zeros(n_voxels, dtype=bool)
+        mask[:3] = True
+
+        mixing, s_modes, spatial_maps = _tensorly_tica(
+            data_cat, mask, echo_times, n_components=n_components, seed=0
+        )
+
+        n_comp_out = mixing.shape[1]
+        assert s_modes.shape == (n_echoes, n_comp_out)
+        assert spatial_maps.shape == (n_voxels, n_comp_out)
+
 
 # ---------------------------------------------------------------------------
 # FSL backend
