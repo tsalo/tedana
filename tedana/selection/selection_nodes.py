@@ -1,6 +1,7 @@
 """Functions that will be used as steps in a decision tree."""
 
 import logging
+import math
 
 import numpy as np
 import pandas as pd
@@ -1852,4 +1853,278 @@ def calc_revised_meanmetricrank_guesses(
 
     selector.tree["nodes"][selector.current_node_idx_]["outputs"] = outputs
 
+    return selector
+
+
+@fill_doc
+def dec_te_peak_range(
+    selector,
+    if_true,
+    if_false,
+    decide_comps,
+    te_peak_min=15,
+    te_peak_max=55,
+    log_extra_info="",
+    custom_node_label="",
+    only_used_metrics=False,
+    tag_if_true=None,
+    tag_if_false=None,
+):
+    """Reject components whose TE-peak falls outside the physiological BOLD range.
+
+    Parameters
+    ----------
+    %(selector)s
+    %(if_true)s
+    %(if_false)s
+    %(decide_comps)s
+    te_peak_min : :obj:`float`, optional
+        Minimum acceptable TE peak in milliseconds. Default is 15.
+    te_peak_max : :obj:`float`, optional
+        Maximum acceptable TE peak in milliseconds. Default is 55.
+    %(log_extra_info)s
+    %(custom_node_label)s
+    %(only_used_metrics)s
+    %(tag_if_true)s
+    %(tag_if_false)s
+
+    Returns
+    -------
+    %(selector)s
+    %(used_metrics)s
+    """
+    outputs = {
+        "decision_node_idx": selector.current_node_idx_,
+        "used_metrics": {"te_peak"},
+        "node_label": None,
+        "n_true": None,
+        "n_false": None,
+    }
+
+    if only_used_metrics:
+        return outputs["used_metrics"]
+
+    function_name_idx = f"Step {selector.current_node_idx_}: dec_te_peak_range"
+    outputs["node_label"] = (
+        custom_node_label
+        or f"Reject if te_peak < {te_peak_min} or te_peak > {te_peak_max}"
+    )
+
+    LGR.info(f"{function_name_idx}: {outputs['node_label']}")
+    if log_extra_info:
+        LGR.info(f"{function_name_idx} {log_extra_info}")
+
+    comps2use = selectcomps2use(selector.component_table_, decide_comps)
+
+    if not comps2use:
+        log_decision_tree_step(function_name_idx, comps2use, decide_comps=decide_comps)
+        outputs["n_true"] = 0
+        outputs["n_false"] = 0
+    else:
+        te_peak_vals = selector.component_table_.loc[comps2use, "te_peak"]
+        decision_boolean = (te_peak_vals < te_peak_min) | (te_peak_vals > te_peak_max)
+        selector, outputs["n_true"], outputs["n_false"] = change_comptable_classifications(
+            selector,
+            if_true,
+            if_false,
+            decision_boolean,
+            tag_if_true=tag_if_true,
+            tag_if_false=tag_if_false,
+        )
+        log_decision_tree_step(
+            function_name_idx,
+            comps2use,
+            n_true=outputs["n_true"],
+            n_false=outputs["n_false"],
+            if_true=if_true,
+            if_false=if_false,
+        )
+
+    selector.tree["nodes"][selector.current_node_idx_]["outputs"] = outputs
+    return selector
+
+
+@fill_doc
+def dec_freq_ratio(
+    selector,
+    if_true,
+    if_false,
+    decide_comps,
+    freq_threshold=0.7,
+    log_extra_info="",
+    custom_node_label="",
+    only_used_metrics=False,
+    tag_if_true=None,
+    tag_if_false=None,
+):
+    """Accept or reject components based on neural-band frequency ratio.
+
+    Parameters
+    ----------
+    %(selector)s
+    %(if_true)s
+    %(if_false)s
+    %(decide_comps)s
+    freq_threshold : :obj:`float`, optional
+        Minimum ratio of 0.01-0.1 Hz power to total power above 0.01 Hz
+        required for acceptance. Default is 0.7.
+    %(log_extra_info)s
+    %(custom_node_label)s
+    %(only_used_metrics)s
+    %(tag_if_true)s
+    %(tag_if_false)s
+
+    Returns
+    -------
+    %(selector)s
+    %(used_metrics)s
+    """
+    outputs = {
+        "decision_node_idx": selector.current_node_idx_,
+        "used_metrics": {"freq_ratio"},
+        "node_label": None,
+        "n_true": None,
+        "n_false": None,
+    }
+
+    if only_used_metrics:
+        return outputs["used_metrics"]
+
+    function_name_idx = f"Step {selector.current_node_idx_}: dec_freq_ratio"
+    outputs["node_label"] = (
+        custom_node_label or f"Accept if freq_ratio > {freq_threshold}"
+    )
+
+    LGR.info(f"{function_name_idx}: {outputs['node_label']}")
+    if log_extra_info:
+        LGR.info(f"{function_name_idx} {log_extra_info}")
+
+    comps2use = selectcomps2use(selector.component_table_, decide_comps)
+
+    if not comps2use:
+        log_decision_tree_step(function_name_idx, comps2use, decide_comps=decide_comps)
+        outputs["n_true"] = 0
+        outputs["n_false"] = 0
+    else:
+        freq_ratio_vals = selector.component_table_.loc[comps2use, "freq_ratio"]
+        decision_boolean = freq_ratio_vals > freq_threshold
+        selector, outputs["n_true"], outputs["n_false"] = change_comptable_classifications(
+            selector,
+            if_true,
+            if_false,
+            decision_boolean,
+            tag_if_true=tag_if_true,
+            tag_if_false=tag_if_false,
+        )
+        log_decision_tree_step(
+            function_name_idx,
+            comps2use,
+            n_true=outputs["n_true"],
+            n_false=outputs["n_false"],
+            if_true=if_true,
+            if_false=if_false,
+        )
+
+    selector.tree["nodes"][selector.current_node_idx_]["outputs"] = outputs
+    return selector
+
+
+@fill_doc
+def dec_keep_top_n(
+    selector,
+    if_true,
+    if_false,
+    decide_comps,
+    keep_ratio=0.3,
+    min_keep_fraction=0.7,
+    log_extra_info="",
+    custom_node_label="",
+    only_used_metrics=False,
+    tag_if_true=None,
+    tag_if_false=None,
+):
+    """Keep the top N components by TE-peak using a dynamic threshold.
+
+    The number to keep is ``max(ceil(n_total * keep_ratio), ceil(n_remaining *
+    min_keep_fraction))``, where ``n_total`` is all components and
+    ``n_remaining`` is those currently in ``decide_comps``.
+
+    Parameters
+    ----------
+    %(selector)s
+    %(if_true)s
+    %(if_false)s
+    %(decide_comps)s
+    keep_ratio : :obj:`float`, optional
+        Fraction of total components to keep. Default is 0.3.
+    min_keep_fraction : :obj:`float`, optional
+        Minimum fraction of remaining components to keep. Default is 0.7.
+    %(log_extra_info)s
+    %(custom_node_label)s
+    %(only_used_metrics)s
+    %(tag_if_true)s
+    %(tag_if_false)s
+
+    Returns
+    -------
+    %(selector)s
+    %(used_metrics)s
+    """
+    outputs = {
+        "decision_node_idx": selector.current_node_idx_,
+        "used_metrics": {"te_peak"},
+        "node_label": None,
+        "n_true": None,
+        "n_false": None,
+    }
+
+    if only_used_metrics:
+        return outputs["used_metrics"]
+
+    function_name_idx = f"Step {selector.current_node_idx_}: dec_keep_top_n"
+    outputs["node_label"] = (
+        custom_node_label
+        or f"Keep top {keep_ratio:.0%} or {min_keep_fraction:.0%} of components by te_peak"
+    )
+
+    LGR.info(f"{function_name_idx}: {outputs['node_label']}")
+    if log_extra_info:
+        LGR.info(f"{function_name_idx} {log_extra_info}")
+
+    comps2use = selectcomps2use(selector.component_table_, decide_comps)
+
+    if not comps2use:
+        log_decision_tree_step(function_name_idx, comps2use, decide_comps=decide_comps)
+        outputs["n_true"] = 0
+        outputs["n_false"] = 0
+    else:
+        n_remaining = len(comps2use)
+        n_keep = max(
+            math.ceil(selector.n_comps_ * keep_ratio),
+            math.ceil(n_remaining * min_keep_fraction),
+        )
+        n_keep = min(n_keep, n_remaining)
+
+        te_peak_vals = selector.component_table_.loc[comps2use, "te_peak"]
+        # The n_keep-th largest value is the inclusive lower bound
+        threshold = sorted(te_peak_vals.values)[-n_keep]
+        decision_boolean = te_peak_vals >= threshold
+        selector, outputs["n_true"], outputs["n_false"] = change_comptable_classifications(
+            selector,
+            if_true,
+            if_false,
+            decision_boolean,
+            tag_if_true=tag_if_true,
+            tag_if_false=tag_if_false,
+        )
+        log_decision_tree_step(
+            function_name_idx,
+            comps2use,
+            n_true=outputs["n_true"],
+            n_false=outputs["n_false"],
+            if_true=if_true,
+            if_false=if_false,
+        )
+
+    selector.tree["nodes"][selector.current_node_idx_]["outputs"] = outputs
     return selector

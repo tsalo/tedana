@@ -275,3 +275,106 @@ def test_te_peak_is_finite():
 
     assert ct["te_peak"].notna().all()
     assert np.isfinite(ct["te_peak"].values).all()
+
+
+# ---------------------------------------------------------------------------
+# Selection nodes
+# ---------------------------------------------------------------------------
+import math
+
+import pandas as pd
+
+
+def _make_selector(te_peaks, freq_ratios=None):
+    """Return a minimal ComponentSelector-like object with te_peak and freq_ratio."""
+    from unittest.mock import MagicMock
+
+    n = len(te_peaks)
+    data = {
+        "Component": [f"ICA_{i:02d}" for i in range(n)],
+        "classification": ["unclassified"] * n,
+        "rationale": [""] * n,
+        "classification_tags": [""] * n,
+        "te_peak": te_peaks,
+    }
+    if freq_ratios is not None:
+        data["freq_ratio"] = freq_ratios
+
+    ct = pd.DataFrame(data)
+
+    selector = MagicMock()
+    selector.component_table_ = ct
+    selector.n_comps_ = n
+    selector.current_node_idx_ = 0
+    selector.tree = {"nodes": [{"outputs": {}}]}
+    selector.cross_component_metrics_ = {}
+    return selector
+
+
+def test_dec_te_peak_range_rejects_out_of_range():
+    from tedana.selection.selection_nodes import dec_te_peak_range
+
+    # peaks: 5 (too low), 25 (ok), 45 (ok), 65 (too high)
+    selector = _make_selector([5.0, 25.0, 45.0, 65.0])
+    selector = dec_te_peak_range(selector, "rejected", "nochange", "all")
+
+    ct = selector.component_table_
+    # if_true="rejected": out-of-range → rejected
+    # if_false="nochange": in-range → classification unchanged (stays "unclassified")
+    assert ct.loc[0, "classification"] == "rejected"
+    assert ct.loc[1, "classification"] == "unclassified"
+    assert ct.loc[2, "classification"] == "unclassified"
+    assert ct.loc[3, "classification"] == "rejected"
+
+
+def test_dec_te_peak_range_custom_bounds():
+    from tedana.selection.selection_nodes import dec_te_peak_range
+
+    selector = _make_selector([10.0, 30.0, 50.0])
+    selector = dec_te_peak_range(
+        selector, "rejected", "nochange", "all", te_peak_min=20, te_peak_max=40
+    )
+    ct = selector.component_table_
+    assert ct.loc[0, "classification"] == "rejected"       # 10 < 20
+    assert ct.loc[1, "classification"] == "unclassified"   # 30, in range; nochange keeps original
+    assert ct.loc[2, "classification"] == "rejected"       # 50 > 40
+
+
+def test_dec_freq_ratio_accepts_above_threshold():
+    from tedana.selection.selection_nodes import dec_freq_ratio
+
+    selector = _make_selector([25.0, 25.0, 25.0], freq_ratios=[0.8, 0.5, 0.72])
+    selector = dec_freq_ratio(selector, "accepted", "rejected", "all")
+
+    ct = selector.component_table_
+    assert ct.loc[0, "classification"] == "accepted"   # 0.8 > 0.7
+    assert ct.loc[1, "classification"] == "rejected"   # 0.5 <= 0.7
+    assert ct.loc[2, "classification"] == "accepted"   # 0.72 > 0.7
+
+
+def test_dec_keep_top_n_keeps_correct_count():
+    from tedana.selection.selection_nodes import dec_keep_top_n
+
+    # 10 components total, keep_ratio=0.3 → keep ceil(10*0.3)=3
+    # min_keep_fraction=0.7 → keep ceil(10*0.7)=7; max(3,7)=7 kept
+    te_peaks = list(range(10, 110, 10))  # [10, 20, ..., 100]
+    selector = _make_selector(te_peaks)
+    # if_true="nochange": top-N kept → classification unchanged (stays "unclassified")
+    # if_false="rejected": bottom components → rejected
+    selector = dec_keep_top_n(selector, "nochange", "rejected", "all", keep_ratio=0.3)
+
+    ct = selector.component_table_
+    # kept = not rejected (classification stayed "unclassified")
+    kept = (ct["classification"] == "unclassified").sum()
+    rejected = (ct["classification"] == "rejected").sum()
+    expected_keep = max(math.ceil(10 * 0.3), math.ceil(10 * 0.7))
+    assert kept == expected_keep
+    assert kept + rejected == 10
+
+
+def test_dec_keep_top_n_only_used_metrics():
+    from tedana.selection.selection_nodes import dec_keep_top_n
+
+    selector = _make_selector([25.0])
+    result = dec_keep_top_n(selector, "nochange", "rejected", "all", only_used_metrics=True)
+    assert "te_peak" in result
