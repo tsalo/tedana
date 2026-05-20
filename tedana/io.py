@@ -718,7 +718,7 @@ def denoise_echoes(data_cat, spatial_maps, mixing, mask, component_table):
         echo_data = data_cat[mask, echo_idx, :]  # (n_masked, n_timepoints)
         echo_dmean = echo_data - echo_data.mean(axis=1, keepdims=True)
         mmix = (np.linalg.pinv(spatial_mask) @ echo_dmean).T  # (n_timepoints, n_components)
-        betas = get_coeffs(echo_dmean.T, mmix)  # (n_masked, n_components)
+        betas = get_coeffs(echo_dmean, mmix)  # (n_masked, n_components)
         noise_ts = betas[:, rej] @ mmix[:, rej].T  # (n_masked, n_timepoints)
         data_denoised[mask, echo_idx, :] = echo_data - noise_ts
 

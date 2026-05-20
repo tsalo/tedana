@@ -859,7 +859,7 @@ def tedana_workflow(
         io_generator.save_file(rmse_map, "rmse img")
         io_generator.add_df_to_file(rmse_df, "confounds tsv")
 
-        del s0_limited, t2s_limited
+        del s0_limited
 
     # optimally combine data
     data_optcom = combine.make_optcom(
@@ -937,11 +937,6 @@ def tedana_workflow(
             op.join(out_dir, "desc-ICA_smodes.tsv"), sep="\t", index=False
         )
 
-        mixing_df = pd.DataFrame(data=mixing, columns=comp_names)
-        io_generator.save_file(mixing_df, "ICA mixing tsv")
-
-        selector.to_files(io_generator)
-
         # Store for reporting
         _tica_s_modes = s_modes
         _tica_echo_times = tes
@@ -957,14 +952,6 @@ def tedana_workflow(
             masksum_denoise,
             t2s=t2s_limited,
             combmode=combmode,
-        )
-
-        io.writeresults(
-            data_optcom_denoised,
-            mask=mask_denoise,
-            component_table=component_table,
-            mixing=mixing,
-            io_generator=io_generator,
         )
 
         # Replace data_optcom with denoised version so shared reporting code works
