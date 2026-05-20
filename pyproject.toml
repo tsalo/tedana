@@ -71,8 +71,10 @@ tests = [
     "requests>=2.31",
 ]
 
+tensor-ica = ["tensorly>=0.8"]
+
 # Aliases
-all = ["tedana[dev,doc,tests]"]
+all = ["tedana[dev,doc,tests,tensor-ica]"]
 
 [project.scripts]
 ica_reclassify = "tedana.workflows.ica_reclassify:_main"
