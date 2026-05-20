@@ -688,6 +688,43 @@ def denoise_ts(data, mixing, mask, component_table):
     return dnts, hikts, lowkts
 
 
+def denoise_echoes(data_cat, spatial_maps, mixing, mask, component_table):
+    """Denoise each echo independently using per-echo mixing matrices.
+
+    Parameters
+    ----------
+    data_cat : (n_voxels, n_echoes, n_timepoints) :obj:`numpy.ndarray`
+        Raw multi-echo data.
+    spatial_maps : (n_voxels, n_components) :obj:`numpy.ndarray`
+        Spatial component maps (full brain space).
+    mixing : (n_timepoints, n_components) :obj:`numpy.ndarray`
+        Z-scored temporal component time courses.
+    mask : (n_voxels,) :obj:`numpy.ndarray` of bool
+        Brain mask.
+    component_table : :obj:`pandas.DataFrame`
+        Must have a ``"classification"`` column.
+
+    Returns
+    -------
+    data_denoised : (n_voxels, n_echoes, n_timepoints) :obj:`numpy.ndarray`
+        Per-echo denoised data.
+    """
+    rej = component_table[component_table["classification"] == "rejected"].index.values
+    n_voxels, n_echoes, n_timepoints = data_cat.shape
+    spatial_mask = spatial_maps[mask]  # (n_masked, n_components)
+    data_denoised = data_cat.copy()
+
+    for echo_idx in range(n_echoes):
+        echo_data = data_cat[mask, echo_idx, :]  # (n_masked, n_timepoints)
+        echo_dmean = echo_data - echo_data.mean(axis=1, keepdims=True)
+        mmix = (np.linalg.pinv(spatial_mask) @ echo_dmean).T  # (n_timepoints, n_components)
+        betas = get_coeffs(echo_dmean.T, mmix)  # (n_masked, n_components)
+        noise_ts = betas[:, rej] @ mmix[:, rej].T  # (n_masked, n_timepoints)
+        data_denoised[mask, echo_idx, :] = echo_data - noise_ts
+
+    return data_denoised
+
+
 # File Writing Functions
 def write_split_ts(data, mixing, mask, component_table, io_generator, echo=0):
     """Split `data` into denoised / noise / ignored time series and save to disk.

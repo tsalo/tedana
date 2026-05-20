@@ -267,9 +267,11 @@ def _get_parser():
             '"fastica" runs FastICA from sklearn once with the seed value. '
             '"robustica" will run FastICA n_robust_runs times and uses clustering methods to '
             "overcome the randomness of the FastICA algorithm. "
-            '"robustica" will be slower.'
+            '"robustica" will be slower. '
+            '"tensorly" runs tensor-ICA using the tensorly library. '
+            '"fsl" runs tensor-ICA using an FSL MELODIC backend.'
         ),
-        choices=["robustica", "fastica"],
+        choices=["robustica", "fastica", "tensorly", "fsl"],
         type=str.lower,
         default=DEFAULT_ICA_METHOD,
     )
@@ -317,6 +319,20 @@ def _get_parser():
             "If convergence is achieved before maxrestart attempts, ICA will finish early."
         ),
         default=DEFAULT_N_MAX_RESTART,
+    )
+    decomposition_args.add_argument(
+        "--keep-ratio",
+        "--keep_ratio",
+        dest="keep_ratio",
+        metavar="FLOAT",
+        type=float,
+        help=(
+            "Fraction of total components to retain before neural-band frequency "
+            "filtering in tensor-ICA classification. "
+            "Only used when --ica-method is 'tensorly' or 'fsl'. "
+            "Default: 0.3."
+        ),
+        default=0.3,
     )
     decomposition_args.add_argument(
         "--mix",
@@ -451,6 +467,7 @@ def tedana_workflow(
     overwrite=False,
     t2smap=None,
     mixing_file=None,
+    keep_ratio=0.3,
     n_threads=1,
     tedana_command=None,
 ):
@@ -518,12 +535,14 @@ def tedana_workflow(
         The file must be a TSV file with the same number of rows as the number of volumes in
         the input data. Each column in the file will be treated as a separate regressor.
         Default is None.
-    ica_method : {'fastica', 'robustica'}, optional
+    ica_method : {'fastica', 'robustica', 'tensorly', 'fsl'}, optional
         The applied ICA method. fastica runs FastICA from sklearn
         once with the seed value. 'robustica' will run
         'FastICA' n_robust_runs times and uses clustering methods to overcome
         the randomness of the FastICA algorithm.
         robustica will be slower.
+        'tensorly' runs tensor-ICA using the tensorly library.
+        'fsl' runs tensor-ICA using an FSL MELODIC backend.
         Default is 'fastica'
     n_robust_runs : :obj:`int`, optional
         The number of times robustica will run. This is only effective when 'ica_method' is
@@ -573,6 +592,10 @@ def tedana_workflow(
     mixing_file : :obj:`str` or None, optional
         File containing mixing matrix, to be used when re-running the workflow.
         If not provided, ME-PCA and ME-ICA are done. Default is None.
+    keep_ratio : :obj:`float`, optional
+        Fraction of total components to retain before neural-band frequency
+        filtering in tensor-ICA classification.
+        Only used when ``ica_method`` is 'tensorly' or 'fsl'. Default is 0.3.
     quiet : :obj:`bool`, optional
         If True, suppresses logging/printing of messages. Default is False.
     overwrite : :obj:`bool`, optional
@@ -653,6 +676,8 @@ def tedana_workflow(
         data = [data]
 
     LGR.info("Initializing and validating component selection tree")
+    if ica_method in ("tensorly", "fsl") and tree == "tedana_orig":
+        tree = "tensor_ica"
     selector = ComponentSelector(tree, out_dir)
 
     # Initialize OutputGenerator with reference image
@@ -863,7 +888,89 @@ def tedana_workflow(
     similarity_t_sne = None
     fastica_convergence_warning_count = None
 
-    if mixing_file is None:
+    if ica_method in ("tensorly", "fsl"):
+        # --- Tensor-ICA path ---
+        _tica_s_modes = None  # for reporting
+        _tica_echo_times = None
+
+        mixing, s_modes, spatial_maps = decomposition.tensor_ica(
+            data_cat,
+            mask_clf,
+            tes,
+            method=ica_method,
+            n_components=None,
+            tedpca=tedpca,
+            t_r=img_t_r,
+            out_dir=out_dir,
+            seed=fixed_seed,
+        )
+
+        component_table = metrics.generate_tensor_metrics(
+            s_modes,
+            mixing,
+            spatial_maps[mask_clf],
+            [te * 1000 for te in tes],
+            img_t_r,
+            n_vols,
+        )
+
+        # Patch keep_ratio into dec_keep_top_n node in the loaded tree
+        for node in selector.tree["nodes"]:
+            if node.get("functionname") == "dec_keep_top_n":
+                node["parameters"]["keep_ratio"] = keep_ratio
+                break
+
+        selector = selection.automatic_selection(
+            component_table,
+            selector,
+        )
+
+        component_table = selector.component_table_
+
+        # Save TE-mode loadings
+        comp_names = [
+            io.add_decomp_prefix(i, prefix="ICA", max_value=mixing.shape[1] - 1)
+            for i in range(mixing.shape[1])
+        ]
+        s_modes_df = pd.DataFrame(s_modes.T, columns=comp_names)
+        s_modes_df.to_csv(
+            op.join(out_dir, "desc-ICA_smodes.tsv"), sep="\t", index=False
+        )
+
+        mixing_df = pd.DataFrame(data=mixing, columns=comp_names)
+        io_generator.save_file(mixing_df, "ICA mixing tsv")
+
+        selector.to_files(io_generator)
+
+        # Store for reporting
+        _tica_s_modes = s_modes
+        _tica_echo_times = tes
+
+        # Per-echo denoising → optimal combination
+        # Note: t2s_full may be deleted before this branch; use t2s_limited
+        data_denoised_echoes = io.denoise_echoes(
+            data_cat, spatial_maps, mixing, mask_denoise, component_table
+        )
+        data_optcom_denoised = combine.make_optcom(
+            data_denoised_echoes,
+            tes,
+            masksum_denoise,
+            t2s=t2s_limited,
+            combmode=combmode,
+        )
+
+        io.writeresults(
+            data_optcom_denoised,
+            mask=mask_denoise,
+            component_table=component_table,
+            mixing=mixing,
+            io_generator=io_generator,
+        )
+
+        # Replace data_optcom with denoised version so shared reporting code works
+        data_optcom = data_optcom_denoised
+
+    elif mixing_file is None:
         # Identify and remove thermal noise from data
         data_reduced, n_components = decomposition.tedpca(
             data_cat,
