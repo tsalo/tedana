@@ -1,0 +1,61 @@
+{
+    "tree_id": "tensor_ica",
+    "info": "Decision tree for tensor-ICA component classification",
+    "report": "Components were classified using tensor-ICA metrics: TE-peak polynomial fitting and neural-band frequency ratio analysis.",
+    "necessary_metrics": [
+        "te_peak",
+        "freq_ratio",
+        "variance_explained"
+    ],
+    "intermediate_classifications": [],
+    "classification_tags": ["Likely BOLD", "Unlikely BOLD"],
+    "nodes": [
+        {
+            "functionname": "manual_classify",
+            "parameters": {"new_classification": "unclassified", "decide_comps": "all"},
+            "kwargs": {
+                "clear_classification_tags": true,
+                "dont_warn_reclassify": true
+            }
+        },
+        {
+            "functionname": "dec_te_peak_range",
+            "parameters": {
+                "if_true": "rejected",
+                "if_false": "nochange",
+                "decide_comps": "all"
+            },
+            "kwargs": {
+                "te_peak_min": 15,
+                "te_peak_max": 55,
+                "tag_if_true": "Unlikely BOLD"
+            }
+        },
+        {
+            "functionname": "dec_keep_top_n",
+            "parameters": {
+                "if_true": "nochange",
+                "if_false": "rejected",
+                "decide_comps": "unclassified"
+            },
+            "kwargs": {
+                "keep_ratio": 0.3,
+                "min_keep_fraction": 0.7,
+                "tag_if_false": "Unlikely BOLD"
+            }
+        },
+        {
+            "functionname": "dec_freq_ratio",
+            "parameters": {
+                "if_true": "accepted",
+                "if_false": "rejected",
+                "decide_comps": "unclassified"
+            },
+            "kwargs": {
+                "freq_threshold": 0.7,
+                "tag_if_true": "Likely BOLD",
+                "tag_if_false": "Unlikely BOLD"
+            }
+        }
+    ]
+}
