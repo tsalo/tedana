@@ -89,6 +89,20 @@ def _create_data_struct(comptable_path, color_mapping=color_mapping):
     df.rename(columns={"variance explained": "var_exp"}, inplace=True)
     df.rename(columns={"Var Exp of rejected to accepted": "var_exp_rej"}, inplace=True)
 
+    # Tensor-ICA tables use "variance_explained" (underscore); normalise here.
+    if "var_exp" not in df.columns and "variance_explained" in df.columns:
+        df.rename(columns={"variance_explained": "var_exp"}, inplace=True)
+
+    # Fill columns absent from tensor-ICA component tables with neutral values.
+    if "normalized variance explained" not in df.columns:
+        df["normalized variance explained"] = df["var_exp"]
+    if "kappa" not in df.columns:
+        df["kappa"] = np.nan
+    if "rho" not in df.columns:
+        df["rho"] = np.nan
+    if "var_exp_rej" not in df.columns:
+        df["var_exp_rej"] = np.nan
+
     # For providing sizes based on Var Explained that are visible
     mm_scaler = MinMaxScaler(feature_range=(4, 20))
     df["var_exp_size"] = mm_scaler.fit_transform(df[["var_exp", "normalized variance explained"]])[
