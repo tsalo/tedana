@@ -951,21 +951,9 @@ def tedana_workflow(
         _tica_echo_times = tes
         _tica_spatial_maps = spatial_maps
 
-        # Per-echo denoising → optimal combination
-        # Note: t2s_full may be deleted before this branch; use t2s_limited
-        data_denoised_echoes = io.denoise_echoes(
-            data_cat, spatial_maps, mixing, mask_denoise, component_table
-        )
-        data_optcom_denoised = combine.make_optcom(
-            data_denoised_echoes,
-            tes,
-            masksum_denoise,
-            t2s=t2s_limited,
-            combmode=combmode,
-        )
-
-        # Replace data_optcom with denoised version so shared reporting code works
-        data_optcom = data_optcom_denoised
+        # data_optcom (computed above from raw echoes with t2s_full) is passed
+        # to the shared io.writeresults() below, which calls denoise_ts() to
+        # produce desc-denoised_bold.nii.gz — same path as fastica/robustica.
 
     elif mixing_file is None:
         # Identify and remove thermal noise from data
