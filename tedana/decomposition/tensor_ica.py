@@ -123,30 +123,43 @@ def _tensorly_tica(data_cat, mask, echo_times, n_components=None, seed=42):
     masked_data = data_cat[mask]  # (n_masked, n_echoes, n_timepoints)
     tensor = tl.tensor(masked_data.transpose(0, 2, 1))  # (n_masked, n_timepoints, n_echoes)
 
-    # Tucker rank for the echo mode is at most n_echoes; for spatial/temporal
-    # modes we clamp to available dimensions.
-    echo_rank = min(n_echoes, n_components)
+    # Tucker ranks: spatial and temporal clamped to available dimensions;
+    # echo rank is always n_echoes so Tucker preserves the full TE structure.
     n_masked = mask.sum()
     spatial_rank = min(n_components, n_masked)
     temporal_rank = min(n_components, n_timepoints)
-    ranks = [spatial_rank, temporal_rank, echo_rank]
+    ranks = [spatial_rank, temporal_rank, n_echoes]
     _, factors = tucker(tensor, rank=ranks, random_state=seed)
-    # factors[0]: (n_masked, spatial_rank)    — spatial
-    # factors[1]: (n_timepoints, temporal_rank) — temporal
-    # factors[2]: (n_echoes, echo_rank)       — echo / TE-mode
+    # factors[0]: (n_masked, spatial_rank)      — spatial
+    # factors[1]: (n_timepoints, temporal_rank)  — temporal
+    # factors[2]: (n_echoes, n_echoes)           — echo / TE-mode (not used directly)
 
-    # Clamp n_components to the smallest rank so all outputs are consistent
-    n_components_actual = min(spatial_rank, temporal_rank, echo_rank)
+    # n_components_actual is limited by spatial and temporal dimensions only,
+    # NOT by n_echoes. The echo-mode bottleneck only applies to Tucker factors[2];
+    # the number of ICA components is independent of it.
+    n_components_actual = min(spatial_rank, temporal_rank)
+    LGR.info(f"Tucker decomposition produced {n_components_actual} components.")
     ica = FastICA(n_components=n_components_actual, random_state=seed, max_iter=500)
     mixing_raw = ica.fit_transform(factors[1][:, :n_components_actual])
-
     mixing = stats.zscore(mixing_raw, axis=0)
 
-    # Slice echo factors to (n_echoes, n_components_actual) for consistent output shape
-    s_modes = factors[2][:, :n_components_actual]
+    # Spatial maps: project the echo-averaged signal onto each temporal ICA component.
+    # Averaging over echoes before projecting improves SNR.
+    data_mean_echo = masked_data.mean(axis=1)  # (n_masked, n_timepoints)
+    spatial_maps_masked = data_mean_echo @ mixing / n_timepoints  # (n_masked, n_components_actual)
+
+    # TE-mode loadings: for each echo, regress the temporal ICA courses against the
+    # echo-specific data and weight by the spatial map.  This gives one s_mode per
+    # ICA component regardless of n_echoes, capturing the T2*-dependent TE profile.
+    spatial_norm = (spatial_maps_masked ** 2).sum(axis=0) + 1e-10
+    s_modes = np.zeros((n_echoes, n_components_actual))
+    for e in range(n_echoes):
+        echo_data = masked_data[:, e, :]  # (n_masked, n_timepoints)
+        betas = echo_data @ mixing / n_timepoints  # (n_masked, n_components_actual)
+        s_modes[e, :] = (betas * spatial_maps_masked).sum(axis=0) / spatial_norm
 
     spatial_maps = np.zeros((n_voxels, n_components_actual))
-    spatial_maps[mask] = factors[0][:, :n_components_actual]
+    spatial_maps[mask] = spatial_maps_masked
 
     return mixing, s_modes, spatial_maps
 

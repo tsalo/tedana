@@ -50,12 +50,11 @@ class TestTensorlyBackend:
             data_cat, mask, echo_times, n_components=n_components, seed=42
         )
 
-        # n_components_actual = min(spatial_rank, temporal_rank, echo_rank)
-        # echo_rank = min(n_echoes, n_components) = min(3, 5) = 3
+        # n_components_actual = min(spatial_rank, temporal_rank); echo rank does
+        # NOT limit ICA components — s_modes are computed post-hoc via projection.
         n_components_actual = min(
             min(n_components, mask.sum()),  # spatial_rank
             min(n_components, n_timepoints),  # temporal_rank
-            min(n_echoes, n_components),  # echo_rank
         )
         assert mixing.shape == (n_timepoints, n_components_actual)
         assert s_modes.shape == (n_echoes, n_components_actual)
@@ -91,13 +90,11 @@ class TestTensorlyBackend:
         data_cat, mask, echo_times = _make_data(n_voxels, n_echoes, n_timepoints)
         mixing, _, _ = _tensorly_tica(data_cat, mask, echo_times, n_components=None)
         # default n_components = min(50, 80 // 4) = 20
-        # n_components_actual = min(spatial_rank, temporal_rank, echo_rank)
-        # echo_rank = min(n_echoes, 20) = min(3, 20) = 3
+        # n_components_actual = min(spatial_rank, temporal_rank); echo rank does NOT limit
         n_components_default = max(1, min(50, n_timepoints // 4))
         n_components_actual = min(
             min(n_components_default, mask.sum()),
             min(n_components_default, n_timepoints),
-            min(n_echoes, n_components_default),
         )
         assert mixing.shape[1] == n_components_actual
 

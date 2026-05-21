@@ -941,7 +941,7 @@ def tedana_workflow(
             io.add_decomp_prefix(i, prefix="ICA", max_value=mixing.shape[1] - 1)
             for i in range(mixing.shape[1])
         ]
-        s_modes_df = pd.DataFrame(s_modes.T, columns=comp_names)
+        s_modes_df = pd.DataFrame(s_modes, columns=comp_names)
         s_modes_df.to_csv(
             op.join(out_dir, "desc-ICA_smodes.tsv"), sep="\t", index=False
         )
