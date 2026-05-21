@@ -501,7 +501,7 @@ def tensor_comp_figures(
         expl_text = str(component_table.loc[compnum, "classification_tags"])
         te_peak = component_table.loc[compnum, "te_peak"]
         freq_ratio = component_table.loc[compnum, "freq_ratio"]
-        var_expl = component_table.loc[compnum, "variance_explained"]
+        var_expl = component_table.loc[compnum, "variance explained"]
         plt_title = (
             f"Comp. {compnum}: var_expl: {var_expl:.4f}, "
             f"te_peak: {te_peak:.1f} ms, freq_ratio: {freq_ratio:.2f}, {expl_text}"

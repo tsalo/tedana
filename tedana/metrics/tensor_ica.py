@@ -32,7 +32,7 @@ def generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vol
     -------
     component_table : :obj:`pandas.DataFrame`
         One row per component with columns: ``te_peak``, ``freq_ratio``,
-        ``variance_explained``, ``classification``, ``rationale``,
+        ``variance explained``, ``normalized variance explained``, ``classification``, ``rationale``,
         ``classification_tags``, ``Component``.
     """
     n_echoes, n_components = s_modes.shape
