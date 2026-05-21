@@ -438,7 +438,7 @@ def test_tensorly_workflow_end_to_end(tmp_path):
 
     # Check component table has expected columns
     ct = pd.read_csv(tmp_path / "desc-tedana_metrics.tsv", sep="\t")
-    for col in ("te_peak", "freq_ratio", "variance explained", "classification"):
+    for col in ("te_peak", "freq_ratio", "kappa", "rho", "variance explained", "classification"):
         assert col in ct.columns, f"Missing column in component table: {col}"
 
     # All components classified

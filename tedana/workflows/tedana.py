@@ -908,7 +908,37 @@ def tedana_workflow(
             seed=fixed_seed,
         )
 
-        component_table = metrics.generate_tensor_metrics(
+        # Compute kappa, rho, and all standard metrics using the same pipeline
+        # as fastica/robustica.  The returned mixing may have sign-flipped columns
+        # (to ensure positive spatial maps), so use the returned value downstream.
+        # te_peak and freq_ratio are tensor-ICA-specific and not in the standard
+        # metric registry; they are added separately below.
+        _tensor_ica_only = {"te_peak", "freq_ratio"}
+        necessary_metrics = [
+            m for m in selector.necessary_metrics if m not in _tensor_ica_only
+        ]
+        extra_metrics = ["variance explained", "normalized variance explained", "kappa", "rho"]
+        necessary_metrics = sorted(list(set(necessary_metrics + extra_metrics)))
+
+        component_table, mixing = metrics.collect.generate_metrics(
+            data_cat=data_cat[mask_clf, ...],
+            data_optcom=data_optcom[mask_clf, :],
+            mixing=mixing,
+            adaptive_mask=masksum_clf[mask_clf],
+            mask_img=unmask(mask_clf, io_generator.mask),
+            tes=tes,
+            n_independent_echos=n_independent_echos,
+            io_generator=io_generator,
+            label="ICA",
+            metrics=necessary_metrics,
+            external_regressors=external_regressors,
+            external_regressor_config=selector.tree.get("external_regressor_config"),
+        )
+
+        # Add tensor-ICA TE-mode metrics (te_peak, freq_ratio) derived from the
+        # Tucker echo-mode factors.  These are the metrics unique to the tensor-ICA
+        # path; all other metrics come from generate_metrics() above.
+        tensor_metrics = metrics.generate_tensor_metrics(
             s_modes,
             mixing,
             spatial_maps[mask_clf],
@@ -916,6 +946,8 @@ def tedana_workflow(
             img_t_r,
             n_vols,
         )
+        component_table["te_peak"] = tensor_metrics["te_peak"].values
+        component_table["freq_ratio"] = tensor_metrics["freq_ratio"].values
 
         # Patch keep_ratio into dec_keep_top_n node in the loaded tree.
         # keep_ratio lives in "kwargs" in the JSON, so patch there (not
