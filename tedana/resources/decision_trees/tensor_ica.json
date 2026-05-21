@@ -4,8 +4,7 @@
     "report": "Components were classified using tensor-ICA metrics: TE-peak polynomial fitting and neural-band frequency ratio analysis.",
     "necessary_metrics": [
         "te_peak",
-        "freq_ratio",
-        "variance_explained"
+        "freq_ratio"
     ],
     "intermediate_classifications": [],
     "classification_tags": ["Likely BOLD", "Unlikely BOLD"],

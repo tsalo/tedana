@@ -242,7 +242,7 @@ def test_generate_tensor_metrics_shape_and_columns():
     ct = generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vols)
 
     assert len(ct) == n_components
-    for col in ("te_peak", "freq_ratio", "variance_explained", "classification"):
+    for col in ("te_peak", "freq_ratio", "variance explained", "classification"):
         assert col in ct.columns, f"Missing column: {col}"
 
 
@@ -261,7 +261,7 @@ def test_variance_explained_sums_to_one():
     s_modes, mixing, spatial_maps, echo_times, tr, n_vols = _make_metric_inputs()
     ct = generate_tensor_metrics(s_modes, mixing, spatial_maps, echo_times, tr, n_vols)
 
-    np.testing.assert_allclose(ct["variance_explained"].sum(), 1.0, atol=1e-6)
+    np.testing.assert_allclose(ct["variance explained"].sum(), 1.0, atol=1e-6)
 
 
 def test_te_peak_is_finite():
@@ -438,7 +438,7 @@ def test_tensorly_workflow_end_to_end(tmp_path):
 
     # Check component table has expected columns
     ct = pd.read_csv(tmp_path / "desc-tedana_metrics.tsv", sep="\t")
-    for col in ("te_peak", "freq_ratio", "variance_explained", "classification"):
+    for col in ("te_peak", "freq_ratio", "variance explained", "classification"):
         assert col in ct.columns, f"Missing column in component table: {col}"
 
     # All components classified
