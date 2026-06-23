@@ -4,10 +4,23 @@ import os.path as op
 from shutil import rmtree
 
 import nibabel as nb
+import numpy as np
 import pytest
 
 from tedana import workflows
 from tedana.tests.utils import get_test_data_path
+
+
+def _write_single_volume_echoes(data_dir, tmp_path):
+    """Write the first volume of each test echo as a 3D NIfTI image."""
+    data = []
+    for echo in range(1, 4):
+        img = nb.load(op.join(data_dir, f"echo{echo}.nii.gz"))
+        echo_data = np.asanyarray(img.dataobj)[..., 0]
+        echo_path = tmp_path / f"echo{echo}_single.nii.gz"
+        nb.Nifti1Image(echo_data, img.affine).to_filename(echo_path)
+        data.append(str(echo_path))
+    return data
 
 
 class TestT2smap:
@@ -131,6 +144,50 @@ class TestT2smap:
         img = nb.load(op.join(out_dir, "desc-optcom_bold.nii.gz"))
         assert len(img.shape) == 4
 
+    def test_single_volume_t2smap(self, tmp_path):
+        """A simple test to confirm that t2smap supports 3D echo inputs."""
+        data_dir = get_test_data_path()
+        data = _write_single_volume_echoes(data_dir, tmp_path)
+        mask = op.join(data_dir, "mask.nii.gz")
+        out_dir = tmp_path / "TED.echo1.single-volume.t2smap"
+        workflows.t2smap_workflow(
+            data,
+            [14.5, 38.5, 62.5],
+            combmode="t2s",
+            fitmode="all",
+            mask=mask,
+            out_dir=str(out_dir),
+        )
+
+        target_shape = nb.load(data[0]).shape
+        img = nb.load(op.join(out_dir, "T2starmap.nii.gz"))
+        assert img.shape == target_shape
+        img = nb.load(op.join(out_dir, "S0map.nii.gz"))
+        assert img.shape == target_shape
+        img = nb.load(op.join(out_dir, "desc-limited_T2starmap.nii.gz"))
+        assert img.shape == target_shape
+        img = nb.load(op.join(out_dir, "desc-limited_S0map.nii.gz"))
+        assert img.shape == target_shape
+        img = nb.load(op.join(out_dir, "desc-optcom_bold.nii.gz"))
+        assert img.shape == target_shape + (1,)
+
+    def test_single_volume_t2smap_paid_fails(self, tmp_path):
+        """PAID combination needs temporal variance, so one-volume inputs should fail clearly."""
+        data_dir = get_test_data_path()
+        data = _write_single_volume_echoes(data_dir, tmp_path)
+        mask = op.join(data_dir, "mask.nii.gz")
+        out_dir = tmp_path / "TED.echo1.single-volume-paid.t2smap"
+
+        with pytest.raises(ValueError, match="PAID combination requires more than one volume"):
+            workflows.t2smap_workflow(
+                data,
+                [14.5, 38.5, 62.5],
+                combmode="paid",
+                fitmode="all",
+                mask=mask,
+                out_dir=str(out_dir),
+            )
+
     def test_t2smap_cli(self):
         """Run test_basic_t2smap1, but use the CLI method."""
         data_dir = get_test_data_path()
@@ -219,4 +276,4 @@ class TestT2smap:
 
     def teardown_method(self):
         # Clean up folders
-        rmtree("TED.echo1.t2smap")
+        rmtree("TED.echo1.t2smap", ignore_errors=True)
