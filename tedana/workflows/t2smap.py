@@ -17,6 +17,137 @@ LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
 
 
+def _forward_difference(data):
+    """Calculate non-circular forward differences along the time axis."""
+    return np.diff(data, axis=-1)
+
+
+def _difference_transpose(differences, n_vols):
+    """Apply the transpose of the non-circular forward-difference operator."""
+    out = np.zeros((*differences.shape[:-1], n_vols), dtype=differences.dtype)
+    out[..., 0] = -differences[..., 0]
+    out[..., 1:-1] = differences[..., :-1] - differences[..., 1:]
+    out[..., -1] = differences[..., -1]
+    return out
+
+
+def _soft_threshold(data, threshold):
+    """Apply scalar soft-thresholding."""
+    return np.sign(data) * np.maximum(np.abs(data) - threshold, 0)
+
+
+def _validate_tv_l2_options(mu, beta, n_outer_iterations, n_inner_iterations):
+    """Validate TV-L2 denoising parameters."""
+    if mu <= 0:
+        raise ValueError("Argument 'tv_l2_mu' must be positive.")
+    if beta <= 0:
+        raise ValueError("Argument 'tv_l2_beta' must be positive.")
+    if n_outer_iterations <= 0:
+        raise ValueError("Argument 'tv_l2_n_outer_iterations' must be a positive integer.")
+    if n_inner_iterations <= 0:
+        raise ValueError("Argument 'tv_l2_n_inner_iterations' must be a positive integer.")
+
+
+def _denoise_tv_l2_chunk(data, mu, beta, n_outer_iterations, n_inner_iterations):
+    """Denoise a two-dimensional batch of time series with TV-L2 ADMM."""
+    n_series, n_vols = data.shape
+    if n_series == 0 or n_vols < 2:
+        return data.copy()
+
+    # Work in float64 internally for stable line-search denominators.
+    b = np.asarray(data, dtype=np.float64)
+    u = b.copy()
+    w = _forward_difference(u)
+    # Standard ADMM multiplier sign convention for the Du = w constraint.
+    lagrange = np.zeros_like(w)
+    threshold = 1.0 / beta
+
+    for _ in range(n_outer_iterations):
+        for _ in range(n_inner_iterations):
+            du = _forward_difference(u)
+            residual = du - w + (lagrange / beta)
+            gradient = beta * _difference_transpose(residual, n_vols) + mu * (u - b)
+            a_gradient = beta * _difference_transpose(
+                _forward_difference(gradient), n_vols
+            ) + mu * gradient
+
+            numerator = np.sum(gradient * gradient, axis=-1)
+            denominator = np.sum(gradient * a_gradient, axis=-1)
+            step_size = np.zeros_like(numerator)
+            np.divide(
+                numerator,
+                denominator,
+                out=step_size,
+                where=np.abs(denominator) > np.finfo(denominator.dtype).eps,
+            )
+            u = u - (step_size[:, np.newaxis] * gradient)
+
+        du = _forward_difference(u)
+        w = _soft_threshold(du + (lagrange / beta), threshold)
+        lagrange = lagrange + beta * (du - w)
+
+    return u.astype(data.dtype, copy=False)
+
+
+def denoise_tv_l2(
+    data,
+    mu=2**-10,
+    beta=2**-4,
+    n_outer_iterations=11,
+    n_inner_iterations=5,
+    chunk_size=10000,
+):
+    """Denoise echo time series with the Michalek and Mikl TV-L2 method.
+
+    Parameters
+    ----------
+    data : (S x E x T) or (S x T) array_like
+        Data to denoise. Denoising is applied independently to every time series along
+        the last axis.
+    mu : :obj:`float`, optional
+        Weight on the L2 data-fidelity term. Default is ``2**-10``, matching
+        Michalek and Mikl (2025).
+    beta : :obj:`float`, optional
+        ADMM penalty parameter. Default is ``2**-4``, matching Michalek and Mikl (2025).
+    n_outer_iterations : :obj:`int`, optional
+        Number of outer ADMM iterations. Default is 11, corresponding to
+        ``k = 0, 1, ..., 10`` in Michalek and Mikl (2025).
+    n_inner_iterations : :obj:`int`, optional
+        Number of inner gradient steps for the inexact ``u`` update. Default is 5.
+    chunk_size : :obj:`int`, optional
+        Number of flattened time series to process per chunk.
+
+    Returns
+    -------
+    denoised : :obj:`numpy.ndarray`
+        TV-L2 denoised data with the same shape and dtype as ``data``.
+    """
+    _validate_tv_l2_options(mu, beta, n_outer_iterations, n_inner_iterations)
+    if chunk_size <= 0:
+        raise ValueError("Argument 'tv_l2_chunk_size' must be a positive integer.")
+
+    data = np.asarray(data)
+    if data.ndim < 2:
+        raise ValueError("Argument 'data' must have at least two dimensions.")
+    if not np.issubdtype(data.dtype, np.floating):
+        data = data.astype(np.float32)
+
+    original_shape = data.shape
+    data_2d = data.reshape(-1, original_shape[-1])
+    denoised = np.empty_like(data_2d)
+
+    for start in range(0, data_2d.shape[0], chunk_size):
+        stop = min(start + chunk_size, data_2d.shape[0])
+        denoised[start:stop] = _denoise_tv_l2_chunk(
+            data_2d[start:stop],
+            mu=mu,
+            beta=beta,
+            n_outer_iterations=n_outer_iterations,
+            n_inner_iterations=n_inner_iterations,
+        )
+
+    return denoised.reshape(original_shape)
+
 def _get_parser():
     """Parse command line inputs for t2smap.
 
@@ -179,6 +310,64 @@ def _get_parser():
         default="t2s",
     )
 
+    tv_args = parser.add_argument_group("TV-L2 Echo Denoising")
+    tv_args.add_argument(
+        "--tv-denoise",
+        dest="tv_l2_denoise",
+        action="store_true",
+        help=(
+            "Denoise each voxelwise echo time series with TV-L2 denoising before "
+            "T2*/S0 fitting."
+        ),
+        default=False,
+    )
+    tv_args.add_argument(
+        "--tv-mu",
+        dest="tv_l2_mu",
+        metavar="FLOAT",
+        type=float,
+        help="Weight on the TV-L2 data-fidelity term.",
+        default=2**-10,
+    )
+    tv_args.add_argument(
+        "--tv-beta",
+        dest="tv_l2_beta",
+        metavar="FLOAT",
+        type=float,
+        help="ADMM penalty parameter for TV-L2 denoising.",
+        default=2**-4,
+    )
+    tv_args.add_argument(
+        "--tv-n-outer-iterations",
+        dest="tv_l2_n_outer_iterations",
+        metavar="INT",
+        type=int,
+        help="Number of outer ADMM iterations for TV-L2 denoising.",
+        default=11,
+    )
+    tv_args.add_argument(
+        "--tv-n-inner-iterations",
+        dest="tv_l2_n_inner_iterations",
+        metavar="INT",
+        type=int,
+        help="Number of inner gradient steps for each TV-L2 ADMM iteration.",
+        default=5,
+    )
+    tv_args.add_argument(
+        "--tv-chunk-size",
+        dest="tv_l2_chunk_size",
+        metavar="INT",
+        type=int,
+        help="Number of voxel/echo time series to denoise per processing chunk.",
+        default=10000,
+    )
+    tv_args.add_argument(
+        "--tv-save-denoised-echos",
+        dest="tv_l2_save_denoised_echos",
+        action="store_true",
+        help="Save TV-L2-denoised echo time series for each echo.",
+        default=False,
+    )
     decomposition_args = parser.add_argument_group("Component Selection")
     decomposition_args.add_argument(
         "--n-independent-echos",
@@ -250,6 +439,13 @@ def t2smap_workflow(
     fittype="loglin",
     fitmode="all",
     combmode="t2s",
+    tv_l2_denoise=False,
+    tv_l2_mu=2**-10,
+    tv_l2_beta=2**-4,
+    tv_l2_n_outer_iterations=11,
+    tv_l2_n_inner_iterations=5,
+    tv_l2_chunk_size=10000,
+    tv_l2_save_denoised_echos=False,
     debug=False,
     verbose=False,
     quiet=False,
@@ -304,6 +500,22 @@ def t2smap_workflow(
         Default is 'all'.
     combmode : {'t2s', 'paid'}, optional
         Combination scheme for TEs: 't2s' (Posse 1999, default), 'paid' (Poser).
+    tv_l2_denoise : :obj:`bool`, optional
+        Denoise each voxelwise echo time series with TV-L2 denoising before T2*/S0
+        fitting. Default is False.
+    tv_l2_mu : :obj:`float`, optional
+        Weight on the TV-L2 data-fidelity term. Default is ``2**-10``.
+    tv_l2_beta : :obj:`float`, optional
+        ADMM penalty parameter for TV-L2 denoising. Default is ``2**-4``.
+    tv_l2_n_outer_iterations : :obj:`int`, optional
+        Number of TV-L2 outer ADMM iterations. Default is 11.
+    tv_l2_n_inner_iterations : :obj:`int`, optional
+        Number of inner gradient steps per TV-L2 ADMM iteration. Default is 5.
+    tv_l2_chunk_size : :obj:`int`, optional
+        Number of voxel/echo time series to denoise per processing chunk.
+        Default is 10000.
+    tv_l2_save_denoised_echos : :obj:`bool`, optional
+        Save TV-L2-denoised echo time series for each echo. Default is False.
     verbose : :obj:`bool`, optional
         Generate intermediate and additional files. Default is False.
     overwrite : :obj:`bool`, optional
@@ -386,6 +598,21 @@ def t2smap_workflow(
             "Please set fitmode='all' or remove the exclude argument."
         )
 
+    if tv_l2_denoise:
+        _validate_tv_l2_options(
+            tv_l2_mu,
+            tv_l2_beta,
+            tv_l2_n_outer_iterations,
+            tv_l2_n_inner_iterations,
+        )
+        if tv_l2_chunk_size <= 0:
+            raise ValueError("Argument 'tv_l2_chunk_size' must be a positive integer.")
+        if fitmode == "all":
+            LGR.warning(
+                "TV-L2 denoising was proposed for dynamic T2* mapping. "
+                "Applying it before fitmode='all' static T2*/S0 estimation."
+            )
+
     # ensure tes are in appropriate format
     tes = [float(te) for te in tes]
     tes = utils.check_te_values(tes)
@@ -422,6 +649,7 @@ def t2smap_workflow(
     LGR.debug(f"Resulting data shape: {data_cat.shape}")
 
     # Create mask for volumes to use based on exclude indices
+    use_volumes = None
     if n_exclude > 0:
         LGR.info(f"Excluding volumes: {exclude_idx}")
         # Adjust exclude indices for dummy scans that are already removed
@@ -455,8 +683,50 @@ def t2smap_workflow(
     LGR.debug(f"Retaining {mask_denoise.sum()}/{n_samp} samples for denoising")
     io_generator.save_file(masksum_denoise, "adaptive mask img")
 
+    if tv_l2_denoise:
+        n_series = int(mask_denoise.sum() * n_echos)
+        LGR.info(
+            "Denoising %d voxel/echo time series with TV-L2 denoising "
+            "(mu=%s, beta=%s, outer iterations=%d, inner iterations=%d)",
+            n_series,
+            tv_l2_mu,
+            tv_l2_beta,
+            tv_l2_n_outer_iterations,
+            tv_l2_n_inner_iterations,
+        )
+        data_denoised_masked = denoise_tv_l2(
+            data_cat[mask_denoise, ...],
+            mu=tv_l2_mu,
+            beta=tv_l2_beta,
+            n_outer_iterations=tv_l2_n_outer_iterations,
+            n_inner_iterations=tv_l2_n_inner_iterations,
+            chunk_size=tv_l2_chunk_size,
+        )
+
+        if tv_l2_save_denoised_echos:
+            tv_echo_files = []
+            for i_echo in range(n_echos):
+                fout = io_generator.save_file(
+                    data_denoised_masked[:, i_echo, :],
+                    "tv denoised ts split img",
+                    echo=i_echo + 1,
+                    mask=mask_denoise,
+                )
+                tv_echo_files.append(op.basename(fout))
+                LGR.info(
+                    f"Writing TV-L2-denoised echo #{i_echo + 1:01d} timeseries: {fout}"
+                )
+            io_generator.registry["tv denoised ts split img"] = tv_echo_files
+
+        if n_exclude > 0:
+            data_without_excluded_vols = data_denoised_masked[:, :, use_volumes]
+        else:
+            data_without_excluded_vols = data_denoised_masked
+
+    else:
+        data_without_excluded_vols = data_without_excluded_vols[mask_denoise, ...]
+
     LGR.info("Computing T2* map")
-    data_without_excluded_vols = data_without_excluded_vols[mask_denoise, ...]
     masksum_masked = masksum_denoise[mask_denoise]
     decay_function = decay.fit_decay if fitmode == "all" else decay.fit_decay_ts
     t2s_full, s0_full, failures, t2s_var, s0_var, t2s_s0_covar = decay_function(
@@ -559,6 +829,20 @@ def t2smap_workflow(
             }
         ],
     }
+
+    if tv_l2_denoise:
+        derivative_metadata["GeneratedBy"][0]["TVL2Denoising"] = {
+            "Description": (
+                "One-dimensional temporal TV-L2 echo denoising before T2*/S0 fitting."
+            ),
+            "Reference": "Michalek and Mikl 2025, doi:10.3389/fnins.2025.1544748",
+            "DifferenceOperator": "Non-circular forward differences along time",
+            "Mu": tv_l2_mu,
+            "Beta": tv_l2_beta,
+            "OuterIterations": tv_l2_n_outer_iterations,
+            "InnerIterations": tv_l2_n_inner_iterations,
+            "ChunkSize": tv_l2_chunk_size,
+        }
 
     io_generator.save_file(derivative_metadata, "data description json")
     io_generator.save_self()

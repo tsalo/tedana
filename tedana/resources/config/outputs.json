@@ -147,6 +147,10 @@
         "orig": "dn_ts_e{echo}",
         "bidsv1.5.0": "echo-{echo}_desc-Denoised_bold"
     },
+    "tv denoised ts split img": {
+        "orig": "tv_dn_ts_e{echo}",
+        "bidsv1.5.0": "echo-{echo}_desc-TVL2Denoised_bold"
+    },
     "gs img": {
         "orig": "T1gs",
         "bidsv1.5.0": "desc-globalSignal_map"
