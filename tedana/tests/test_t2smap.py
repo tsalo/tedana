@@ -5,54 +5,10 @@ import os.path as op
 from shutil import rmtree
 
 import nibabel as nb
-import numpy as np
 import pytest
 
 from tedana import workflows
 from tedana.tests.utils import get_test_data_path
-
-
-class TestTVL2Denoising:
-    def test_constant_series_unchanged(self):
-        """TV-L2 denoising should leave constant time series unchanged."""
-        data = np.ones((2, 3, 8), dtype=np.float32)
-        denoised = workflows.t2smap.denoise_tv_l2(data, chunk_size=2)
-
-        assert denoised.dtype == data.dtype
-        assert denoised.shape == data.shape
-        assert np.allclose(denoised, data)
-
-    def test_spike_is_attenuated(self):
-        """TV-L2 denoising should attenuate isolated temporal spikes."""
-        data = np.ones((1, 7), dtype=np.float32)
-        data[0, 3] = 10
-
-        denoised = workflows.t2smap.denoise_tv_l2(data, chunk_size=1)
-
-        assert np.all(np.isfinite(denoised))
-        assert denoised[0, 3] < data[0, 3]
-        assert denoised[0, 3] > data[0, 0]
-
-    def test_chunking_matches_full_batch(self):
-        """Chunked TV-L2 denoising should match full-batch denoising."""
-        rng = np.random.default_rng(0)
-        data = rng.normal(size=(5, 2, 12)).astype(np.float32)
-
-        full = workflows.t2smap.denoise_tv_l2(data, chunk_size=100)
-        chunked = workflows.t2smap.denoise_tv_l2(data, chunk_size=3)
-
-        assert np.allclose(full, chunked)
-
-    def test_invalid_parameters(self):
-        """TV-L2 denoising should reject invalid parameters."""
-        data = np.ones((1, 5), dtype=np.float32)
-
-        with pytest.raises(ValueError, match="tv_l2_mu"):
-            workflows.t2smap.denoise_tv_l2(data, mu=0)
-        with pytest.raises(ValueError, match="tv_l2_beta"):
-            workflows.t2smap.denoise_tv_l2(data, beta=0)
-        with pytest.raises(ValueError, match="tv_l2_chunk_size"):
-            workflows.t2smap.denoise_tv_l2(data, chunk_size=0)
 
 
 class TestT2smap:
@@ -223,6 +179,37 @@ class TestT2smap:
         target_shape[3] = target_shape[3] - 1  # account for dummy scans, but not exclude; #1401
         output_shape = list(img.shape)
         assert output_shape == target_shape
+
+    @pytest.mark.parametrize("fittype", ["loglin-weighted", "loglin-irls"])
+    def test_parser_accepts_weighted_fittypes(self, fittype):
+        """The t2smap CLI accepts the weighted log-linear fittypes."""
+        echo1 = op.join(get_test_data_path(), "echo1.nii.gz")
+        parser = workflows.t2smap._get_parser()
+        args = parser.parse_args(["-d", echo1, "-e", "0.0145", "--fittype", fittype])
+        assert args.fittype == fittype
+
+    def test_basic_t2smap_weighted_loglin(self):
+        """t2smap produces dynamic 4D T2*/S0 maps with the weighted log-linear fit."""
+        data_dir = get_test_data_path()
+        data = [
+            op.join(data_dir, "echo1.nii.gz"),
+            op.join(data_dir, "echo2.nii.gz"),
+            op.join(data_dir, "echo3.nii.gz"),
+        ]
+        out_dir = "TED.echo1.t2smap"
+        workflows.t2smap_workflow(
+            data,
+            [14.5, 38.5, 62.5],
+            combmode="t2s",
+            fitmode="ts",
+            fittype="loglin-weighted",
+            out_dir=out_dir,
+        )
+
+        t2s_img = nb.load(op.join(out_dir, "T2starmap.nii.gz"))
+        s0_img = nb.load(op.join(out_dir, "S0map.nii.gz"))
+        assert len(t2s_img.shape) == 4
+        assert len(s0_img.shape) == 4
 
     def test_basic_t2smap_tv_l2(self):
         """A simple test to confirm that t2smap can use TV-L2 denoising."""

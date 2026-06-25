@@ -69,6 +69,78 @@ def test_fit_decay_ts(testdata1):
     assert t2s_s0_covar is None
 
 
+def _make_monoexponential(tes, s0, t2star, n_samp=4, n_vols=3):
+    """Build a noiseless monoexponential dataset shaped (n_samp, E, n_vols)."""
+    tes = np.asarray(tes)
+    signal = s0 * np.exp(-tes / t2star)  # (E,)
+    data = np.tile(signal[None, :, None], (n_samp, 1, n_vols))
+    return data
+
+
+def test_fit_loglinear_weighted_recovers_known_params():
+    """The measured-S^2 weighted fit recovers known T2*/S0 from clean data."""
+    tes = np.array([0.0145, 0.0385, 0.0625])
+    s0_true, t2s_true = 10000.0, 0.035
+    data = _make_monoexponential(tes, s0_true, t2s_true)
+    adaptive_mask = np.full(data.shape[0], 3, dtype=int)
+
+    t2s, s0 = me.fit_loglinear_weighted(data, tes, adaptive_mask, weighting="measured")
+
+    assert np.allclose(t2s, t2s_true, rtol=1e-2)
+    assert np.allclose(s0, s0_true, rtol=1e-2)
+
+
+def test_fit_loglinear_irls_recovers_known_params():
+    """The IRLS (predicted-signal) weighted fit recovers known T2*/S0 from clean data."""
+    tes = np.array([0.0145, 0.0385, 0.0625])
+    s0_true, t2s_true = 10000.0, 0.035
+    data = _make_monoexponential(tes, s0_true, t2s_true)
+    adaptive_mask = np.full(data.shape[0], 3, dtype=int)
+
+    t2s, s0 = me.fit_loglinear_weighted(data, tes, adaptive_mask, weighting="predicted")
+
+    assert np.all(np.isfinite(t2s))
+    assert np.all(np.isfinite(s0))
+    assert np.allclose(t2s, t2s_true, rtol=1e-2)
+    assert np.allclose(s0, s0_true, rtol=1e-2)
+
+
+def test_fit_loglinear_weighted_downweights_noisy_late_echo():
+    """Weighting by S^2 downweights a noisy low-signal late echo vs plain OLS."""
+    tes = np.array([0.0145, 0.0385, 0.0625])
+    s0_true, t2s_true = 10000.0, 0.035
+    data = _make_monoexponential(tes, s0_true, t2s_true)
+    # Inflate the (low-signal) third echo, as a noise floor would, biasing T2* upward.
+    data[:, 2, :] = 3000.0
+    adaptive_mask = np.full(data.shape[0], 3, dtype=int)
+
+    t2s_ols, _ = me.fit_loglinear(data, tes, adaptive_mask)
+    t2s_wls, _ = me.fit_loglinear_weighted(data, tes, adaptive_mask, weighting="measured")
+
+    # OLS is biased upward by the inflated echo; weighting pulls it back toward truth.
+    assert np.all(t2s_wls < t2s_ols)
+    assert np.all(np.abs(t2s_wls - t2s_true) < np.abs(t2s_ols - t2s_true))
+
+
+@pytest.mark.parametrize("fittype", ["loglin-weighted", "loglin-irls"])
+def test_fit_decay_weighted_dispatch(testdata1, fittype):
+    """fit_decay dispatches the new weighted fittypes and returns loglin-style outputs."""
+    masked_data = testdata1["data"][testdata1["mask"], ...]
+    masked_adaptive_mask = testdata1["adaptive_mask"][testdata1["mask"]]
+    t2s, s0, failures, t2s_var, s0_var, t2s_s0_covar = me.fit_decay(
+        masked_data,
+        testdata1["tes"],
+        masked_adaptive_mask,
+        fittype,
+    )
+    assert t2s.ndim == 1
+    assert s0.ndim == 1
+    assert failures is None
+    assert t2s_var is None
+    assert s0_var is None
+    assert t2s_s0_covar is None
+
+
 def test__apply_t2s_floor():
     """
     _apply_t2s_floor applies a floor to T2* values to prevent a ZeroDivisionError during.

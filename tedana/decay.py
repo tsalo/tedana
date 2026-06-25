@@ -383,6 +383,156 @@ def fit_loglinear(data_cat, echo_times, adaptive_mask, report=True):
     return t2s, s0
 
 
+def _weighted_loglinear_betas(predictor, log_data, weights):
+    """Solve weighted log-linear regressions, vectorized across columns.
+
+    Fits ``log_data ≈ beta0 + predictor * beta1`` for each column of ``log_data``
+    by weighted least squares, using the closed-form 2x2 normal equations.
+
+    Parameters
+    ----------
+    predictor : (N,) :obj:`numpy.ndarray`
+        Per-observation predictor (``-TE``), shared across columns.
+    log_data : (N x C) :obj:`numpy.ndarray`
+        Log-transformed signal, one regression per column.
+    weights : (N x C) :obj:`numpy.ndarray`
+        Per-observation, per-column weights.
+
+    Returns
+    -------
+    beta0, beta1 : (C,) :obj:`numpy.ndarray`
+        Intercept and slope estimates per column. Columns with a degenerate
+        (near-zero determinant) design are returned as zeros.
+    """
+    t = predictor[:, np.newaxis]
+    sw = np.sum(weights, axis=0)
+    swt = np.sum(weights * t, axis=0)
+    swtt = np.sum(weights * t**2, axis=0)
+    swy = np.sum(weights * log_data, axis=0)
+    swty = np.sum(weights * t * log_data, axis=0)
+
+    det = sw * swtt - swt**2
+    valid = np.abs(det) > np.finfo(det.dtype).eps
+    beta0 = np.zeros_like(det)
+    beta1 = np.zeros_like(det)
+    beta1[valid] = (sw * swty - swt * swy)[valid] / det[valid]
+    beta0[valid] = (swtt * swy - swt * swty)[valid] / det[valid]
+    return beta0, beta1
+
+
+def fit_loglinear_weighted(
+    data_cat, echo_times, adaptive_mask, weighting="measured", report=True
+):
+    """Fit monoexponential decay with weighted log-linear regression.
+
+    This is the weighted log-linear fit referenced by Michalek and Mikl (2025),
+    following Michalek et al. (2019). Ordinary log-linear fitting amplifies noise
+    at low signal because the logarithm inflates the noise of later (low-signal)
+    echoes. Weighting each observation compensates for this noise boost.
+
+    Parameters
+    ----------
+    data_cat : (Md x E x T) :obj:`numpy.ndarray`
+        Multi-echo data. Md is samples in denoising mask, E is echoes, and T is timepoints.
+    echo_times : (E,) array_like
+        Echo times in seconds.
+    adaptive_mask : (Md,) :obj:`numpy.ndarray`
+        Array where each value indicates the number of echoes with good signal
+        for that voxel. See `make_adaptive_mask`.
+    weighting : {"measured", "predicted"}, optional
+        How to compute the regression weights. "measured" weights each observation
+        by the squared measured signal (:math:`S^2`); this is a single closed-form
+        weighted least-squares fit. "predicted" uses iteratively reweighted least
+        squares (IRLS), recomputing weights from the squared model-predicted signal.
+        Default is "measured".
+    report : :obj:`bool`, optional
+        Whether to log a description of this step or not. Default is True.
+
+    Returns
+    -------
+    t2s, s0 : (Md,) :obj:`numpy.ndarray`
+        "Full" T2* and S0 maps without floors or ceilings applied.
+
+    Notes
+    -----
+    The weights use the squared signal (:math:`S^2`), the standard inverse
+    log-space variance for additive measurement noise. The exact weighting
+    coefficients of Michalek et al. (2019, Eqs 12-14) are not reproduced here.
+    """
+    if weighting not in ("measured", "predicted"):
+        raise ValueError(f"Unknown weighting option: {weighting}")
+
+    if report:
+        RepLGR.info(
+            "A monoexponential model was fit to the data at each voxel using "
+            "weighted log-linear regression in order to estimate T2* and S0 maps. "
+            "Each observation was weighted by the squared signal to compensate for "
+            "the noise boost that the logarithm introduces at later echoes."
+        )
+    n_samp, _, n_vols = data_cat.shape
+    n_irls_iterations = 10
+
+    echos_to_run = np.unique(adaptive_mask)
+    # When there is one good echo, use two
+    if 1 in echos_to_run:
+        echos_to_run = np.sort(np.unique(np.append(echos_to_run, 2)))
+    echos_to_run = echos_to_run[echos_to_run >= 2]
+
+    t2s_asc_maps = np.zeros([n_samp, len(echos_to_run)])
+    s0_asc_maps = np.zeros([n_samp, len(echos_to_run)])
+    echo_masks = np.zeros([n_samp, len(echos_to_run)], dtype=bool)
+
+    for i_echo, echo_num in enumerate(echos_to_run):
+        if echo_num == 2:
+            voxel_idx = np.where(np.logical_and(adaptive_mask > 0, adaptive_mask <= echo_num))[0]
+        else:
+            voxel_idx = np.where(adaptive_mask == echo_num)[0]
+
+        echo_mask = np.squeeze(echo_masks[..., i_echo])
+        echo_mask[adaptive_mask == echo_num] = True
+        echo_masks[..., i_echo] = echo_mask
+
+        # observations are (echo, timepoint) pairs, stacked echo-major to match `predictor`
+        data_2d = data_cat[voxel_idx, :echo_num, :].reshape(len(voxel_idx), -1).T
+        log_data = np.log(np.abs(data_2d) + 1)
+        predictor = np.repeat([-te for te in echo_times[:echo_num]], n_vols)
+
+        # Initialize from the measured-signal weighting in both cases.
+        weights = data_2d**2
+        beta0, beta1 = _weighted_loglinear_betas(predictor, log_data, weights)
+
+        if weighting == "predicted":
+            for _ in range(n_irls_iterations):
+                predicted_log = beta0[np.newaxis, :] + predictor[:, np.newaxis] * beta1
+                # Max-normalize per column (WLS is scale-invariant in weights) to avoid overflow.
+                predicted_log = predicted_log - np.max(predicted_log, axis=0, keepdims=True)
+                weights = np.exp(2 * predicted_log)
+                beta0, beta1 = _weighted_loglinear_betas(predictor, log_data, weights)
+
+        # Ill-conditioned voxels (beta1 == 0 from a degenerate design) yield 0,
+        # which is treated as a failed fit downstream. Suppress the expected
+        # divide/overflow on those entries and zero out any non-finite results.
+        good = beta1 != 0
+        t2s_col = np.zeros_like(beta1)
+        s0_col = np.zeros_like(beta0)
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            t2s_col[good] = 1.0 / beta1[good]
+            s0_col[good] = np.exp(beta0[good])
+        t2s_col[~np.isfinite(t2s_col)] = 0
+        s0_col[~np.isfinite(s0_col)] = 0
+
+        t2s_asc_maps[voxel_idx, i_echo] = t2s_col
+        s0_asc_maps[voxel_idx, i_echo] = s0_col
+
+    # create full T2* and S0 maps
+    t2s = utils.unmask(t2s_asc_maps[echo_masks], adaptive_mask > 1)
+    s0 = utils.unmask(s0_asc_maps[echo_masks], adaptive_mask > 1)
+    t2s[adaptive_mask == 1] = t2s_asc_maps[adaptive_mask == 1, 0]
+    s0[adaptive_mask == 1] = s0_asc_maps[adaptive_mask == 1, 0]
+
+    return t2s, s0
+
+
 def fit_decay(data, tes, adaptive_mask, fittype, report=True, n_threads=1):
     """Fit voxel-wise monoexponential decay models to ``data``.
 
@@ -398,8 +548,9 @@ def fit_decay(data, tes, adaptive_mask, fittype, report=True, n_threads=1):
         for that voxel. This mask may be thresholded; for example, with values
         less than 3 set to 0.
         For more information on thresholding, see `make_adaptive_mask`.
-    fittype : {loglin, curvefit}
-        The type of model fit to use
+    fittype : {loglin, curvefit, loglin-weighted, loglin-irls}
+        The type of model fit to use. "loglin-weighted" and "loglin-irls" are
+        weighted log-linear fits (measured-S^2 and IRLS, respectively).
     report : bool, optional
         Whether to log a description of this step or not. Default is True.
     n_threads : int, optional
@@ -456,6 +607,16 @@ def fit_decay(data, tes, adaptive_mask, fittype, report=True, n_threads=1):
             data_cat=data,
             echo_times=tes,
             adaptive_mask=adaptive_mask,
+            report=report,
+        )
+    elif fittype in ("loglin-weighted", "loglin-irls"):
+        failures, t2s_var, s0_var, t2s_s0_covar = None, None, None, None
+        weighting = "measured" if fittype == "loglin-weighted" else "predicted"
+        t2s, s0 = fit_loglinear_weighted(
+            data_cat=data,
+            echo_times=tes,
+            adaptive_mask=adaptive_mask,
+            weighting=weighting,
             report=report,
         )
     elif fittype == "curvefit":
