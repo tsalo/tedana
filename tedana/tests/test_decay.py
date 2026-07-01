@@ -227,38 +227,51 @@ def test_smoke_fit_decay_curvefit_ts():
     assert t2s_s0_covar.ndim == 2
 
 
-def test_rmse_best_n_echoes_clean_decay_picks_all():
-    """A clean monoexponential decay uses every echo."""
+def test_rmse_good_echo_count_clean_decay_keeps_all():
+    """A clean decay whose residuals stay within k*sigma keeps every echo."""
     tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
     signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
-    assert me._rmse_best_n_echoes(signal, tes) == 5
+    sds = np.full(5, 5.0)
+    assert me._rmse_good_echo_count(signal, sds, tes) == 5
 
 
-def test_rmse_best_n_echoes_bad_final_echo_drops_it():
-    """A corrupted final echo is excluded, keeping N-1 echoes."""
+def test_rmse_good_echo_count_dropout_final_echo():
+    """A final echo sitting above the decay by >k*sigma is rejected (N-1)."""
     tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
     signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
-    signal[4] = signal[3] * 3.0  # break the decay at the last echo
-    assert me._rmse_best_n_echoes(signal, tes) == 4
+    signal[4] = 400.0  # predicted ~153; residual ~247 >> 3*5
+    sds = np.full(5, 5.0)
+    assert me._rmse_good_echo_count(signal, sds, tes) == 4
 
 
-def test_rmse_best_n_echoes_fewer_than_three_defers():
+def test_rmse_good_echo_count_fewer_than_three_defers():
     """With fewer than three echoes the scorer returns the available count."""
     tes = np.array([0.015, 0.030])
     signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
-    assert me._rmse_best_n_echoes(signal, tes) == 2
+    sds = np.full(2, 5.0)
+    assert me._rmse_good_echo_count(signal, sds, tes) == 2
 
 
-def test_rmse_best_n_echoes_all_fits_fail_defers(monkeypatch):
-    """When every curve_fit raises, the scorer defers to the available count."""
+def test_rmse_good_echo_count_zero_sigma_guard_keeps_echo():
+    """When sigma is zero (no noise estimate), a deviating echo is NOT removed."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    signal[4] = 400.0  # would be rejected if sigma allowed a test
+    sds = np.zeros(5)  # e.g. single-timepoint data
+    assert me._rmse_good_echo_count(signal, sds, tes) == 5
+
+
+def test_rmse_good_echo_count_seed_fit_failure_defers(monkeypatch):
+    """When the seed (echoes 1-3) fit raises, the scorer defers to the available count."""
     tes = np.array([0.015, 0.030, 0.045, 0.060])
     signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    sds = np.full(4, 5.0)
 
     def _raise(*args, **kwargs):
         raise RuntimeError("forced failure")
 
     monkeypatch.setattr(me.scipy.optimize, "curve_fit", _raise)
-    assert me._rmse_best_n_echoes(signal, tes) == 4
+    assert me._rmse_good_echo_count(signal, sds, tes) == 4
 
 
 def test_get_rmse_adaptive_mask_counts_per_voxel():

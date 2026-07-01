@@ -83,24 +83,30 @@ def monoexponential(tes, s0, t2star):
     return s0 * np.exp(-tes / t2star)
 
 
-def _rmse_best_n_echoes(signal, tes):
-    """Choose the echo count minimizing degrees-of-freedom-adjusted fit error.
+def _rmse_good_echo_count(signal, sds, tes, k=3.0):
+    """Count leading echoes consistent with a single monoexponential decay.
 
-    For a single voxel, fit the monoexponential model to the first ``n`` echoes
-    (``n`` from 3 up to ``len(signal)``) using the per-echo temporal mean, and return
-    the ``n`` with the lowest reduced chi-squared (``SSE / (n - 2)``). ``n = 2`` is
-    excluded because a two-parameter model fits two points exactly (zero degrees of
-    freedom). Ties resolve to the larger echo count, so equally-good fits keep more
-    data. If fewer than three echoes are available, or every candidate fit fails, the
-    available echo count is returned (deferral).
+    Seed the fit with the first three echoes (the minimal fittable set for a
+    two-parameter model), then extend echo by echo: fit the confirmed-good echoes
+    ``1 .. n-1``, predict echo ``n``, and stop when the residual exceeds ``k`` times
+    that echo's temporal standard deviation (``predict-then-test``, so a dropped-out
+    echo does not pull its own prediction). Echoes whose temporal SD is zero or
+    non-finite cannot be tested and are kept. Fewer than three available echoes, or
+    a failed seed fit, defers (returns the available count); a later fit failure
+    returns the count confirmed so far.
 
     Parameters
     ----------
     signal : (n,) :obj:`numpy.ndarray`
-        Per-echo temporal-mean signal, already truncated to a voxel's leading
+        Per-echo temporal-mean signal, truncated to a voxel's leading
         positive/finite echoes.
+    sds : (n,) :obj:`numpy.ndarray`
+        Per-echo temporal standard deviation, aligned with ``signal``.
     tes : (n,) :obj:`numpy.ndarray`
         Echo times in seconds, aligned with ``signal``.
+    k : :obj:`float`, optional
+        Number of temporal standard deviations a residual may reach before the echo
+        is treated as inconsistent with the decay. Default is 3.0.
 
     Returns
     -------
@@ -111,37 +117,40 @@ def _rmse_best_n_echoes(signal, tes):
     if n_avail < 3:
         return n_avail
 
-    best_n = n_avail
-    best_score = np.inf
-    for n in range(3, n_avail + 1):
-        te_sub = tes[:n]
-        sig_sub = signal[:n]
+    for n in range(4, n_avail + 1):
+        # Fit the confirmed-good echoes 1..n-1 (indices 0..n-2).
+        te_fit = tes[: n - 1]
+        sig_fit = signal[: n - 1]
 
         # Two-point log-linear initial estimate for the nonlinear fit.
-        denom = np.log(sig_sub[0]) - np.log(sig_sub[-1])
-        t2s_init = (te_sub[-1] - te_sub[0]) / denom if denom > 0 else te_sub[-1]
+        denom = np.log(sig_fit[0]) - np.log(sig_fit[-1])
+        t2s_init = (te_fit[-1] - te_fit[0]) / denom if denom > 0 else te_fit[-1]
         if not np.isfinite(t2s_init) or t2s_init <= 0:
-            t2s_init = te_sub[-1]
-        s0_init = sig_sub[0] * np.exp(te_sub[0] / t2s_init)
+            t2s_init = te_fit[-1]
+        s0_init = sig_fit[0] * np.exp(te_fit[0] / t2s_init)
 
         try:
             popt, _ = scipy.optimize.curve_fit(
                 monoexponential,
-                te_sub,
-                sig_sub,
+                te_fit,
+                sig_fit,
                 p0=(s0_init, t2s_init),
-                bounds=((np.min(sig_sub), 0), (np.inf, np.inf)),
+                bounds=((np.min(sig_fit), 0), (np.inf, np.inf)),
             )
         except (RuntimeError, ValueError):
-            continue
+            # Seed fit failed -> defer; later fit failed -> keep what is confirmed.
+            return n_avail if n == 4 else n - 1
 
-        predicted = monoexponential(te_sub, popt[0], popt[1])
-        reduced_chi2 = np.sum((sig_sub - predicted) ** 2) / (n - 2)
-        if reduced_chi2 <= best_score:
-            best_score = reduced_chi2
-            best_n = n
+        predicted = monoexponential(tes[n - 1], popt[0], popt[1])
+        sigma_n = sds[n - 1]
+        if (
+            np.isfinite(sigma_n)
+            and sigma_n > 0
+            and abs(signal[n - 1] - predicted) >= k * sigma_n
+        ):
+            return n - 1
 
-    return best_n
+    return n_avail
 
 
 def _get_rmse_adaptive_mask(echo_means, tes):
