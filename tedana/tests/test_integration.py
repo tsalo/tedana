@@ -794,7 +794,7 @@ def test_integration_t2smap(skip_integration):
         + ["-e"]
         + [str(te) for te in echo_times]
         + ["--out-dir", out_dir, "--fittype", "curvefit"]
-        + ["--masktype", "dropout", "decay"]
+        + ["--masktype", "dropout", "decay", "rmse"]
         + ["--n-independent-echos", "4"]
         + ["--dummy-scans", "1"]
         + ["--exclude", "1:4"]
