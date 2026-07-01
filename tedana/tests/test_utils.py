@@ -250,19 +250,21 @@ def test_make_adaptive_mask(caplog):
 
 
 def test_make_adaptive_mask_rmse():
-    """The rmse method selects good-echo counts and combines via element-wise min."""
-    tes = np.asarray([0.015, 0.030, 0.045, 0.060, 0.075])
-    clean = utils_decay_monoexp(tes, 1000.0, 0.040)
+    """The rmse method selects good-echo counts via the noise-scaled fit test."""
+    tes = [0.015, 0.030, 0.045, 0.060, 0.075]
+    clean = np.asarray(utils_decay_monoexp(np.asarray(tes), 1000.0, 0.040))
 
-    bad_last = clean.copy()
-    bad_last[4] = bad_last[3] * 3.0  # rmse -> 4
+    dropout_last = clean.copy()
+    dropout_last[4] = 400.0  # residual >> 3*sigma -> rmse picks 4
 
-    # Build (n_voxels, n_echos, n_time) data with a single time point per echo, so
-    # that the temporal mean taken inside make_adaptive_mask exactly recovers these
-    # values (avoiding floating-point drift from averaging repeated values, which is
-    # large enough to flip the sensitive nonlinear fit in ``_rmse_best_n_echoes``).
-    means = np.stack([clean, bad_last], axis=0)
-    data = means[:, :, np.newaxis]
+    means = np.stack([clean, dropout_last], axis=0)  # (2 voxels, 5 echoes)
+
+    # Build a 10-timepoint series with exact per-echo mean and a known SD of 8.0:
+    # a zero-mean +/-8 alternating perturbation leaves the temporal mean unchanged
+    # and gives temporal SD == 8.0 (3*sigma == 24 << the ~247 dropout residual).
+    n_time = 10
+    perturb = 8.0 * np.tile([1.0, -1.0], n_time // 2)  # shape (10,), mean 0, sd 8
+    data = means[:, :, np.newaxis] + perturb[np.newaxis, np.newaxis, :]
 
     mask, adaptive_mask = utils.make_adaptive_mask(
         data,

@@ -199,7 +199,8 @@ def make_adaptive_mask(
     if "rmse" in methods:
         from tedana.decay import _get_rmse_adaptive_mask
 
-        rmse_adaptive_mask = _get_rmse_adaptive_mask(echo_means, tes)
+        echo_sds = data.std(axis=-1)  # temporal SD of echos (noise scale)
+        rmse_adaptive_mask = _get_rmse_adaptive_mask(echo_means, echo_sds, tes)
         adaptive_masks.append(rmse_adaptive_mask)
 
     # Retain the most conservative of the selected adaptive mask estimates
