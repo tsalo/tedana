@@ -193,7 +193,6 @@ def _get_rmse_adaptive_mask(echo_means, echo_sds, tes, k=3.0, n_threads=1):
         adaptive-mask methods.
     """
     tes = np.asarray(tes, dtype=float)
-    n_samples = echo_means.shape[0]
 
     # Leading run of positive, finite echoes per voxel.
     good = np.isfinite(echo_means) & (echo_means > 0)
