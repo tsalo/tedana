@@ -119,7 +119,8 @@ def _get_parser():
             '"decay" removes voxels where the raw signal does not decay across echoes. '
             '"rmse" keeps the leading echoes whose monoexponential fit stays consistent with the '
             "data, stopping at the first echo that deviates from the decay by more than its "
-            "temporal noise. "
+            "temporal noise. This test can be aggressive on real data, so inspect the adaptive "
+            "mask before relying on it. "
             "Users can specify one, several, or none of the models."
         ),
         choices=["dropout", "decay", "rmse", "none"],
@@ -304,9 +305,10 @@ def t2smap_workflow(
         or a mix of the two (e.g., '0,5:10,15').
         Indices are 0-based.
         Default is to not exclude any volumes.
-    masktype : :obj:`list` with 'dropout' and/or 'decay' or None, optional
+    masktype : :obj:`list` with 'dropout', 'decay', 'rmse', and/or 'none', optional
         Method(s) by which to define the adaptive mask. Default is ["dropout"].
-        Valid methods are "dropout", "decay", "rmse", and "none".
+        Valid methods are "dropout", "decay", "rmse", and "none". The "rmse" method can be
+        aggressive on real data; inspect the adaptive mask before relying on it.
     fittype : {'loglin', 'curvefit'}, optional
         Monoexponential fitting method.
         'loglin' means to use the the default linear fit to the log of

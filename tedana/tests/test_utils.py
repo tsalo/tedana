@@ -286,6 +286,27 @@ def test_make_adaptive_mask_rmse():
         utils.make_adaptive_mask(data, methods=["rmse"])
 
 
+def test_make_adaptive_mask_rmse_combines_via_minimum():
+    """Combining rmse with dropout yields the element-wise minimum of each alone."""
+    tes = [0.015, 0.030, 0.045, 0.060, 0.075]
+    clean = np.asarray(utils_decay_monoexp(np.asarray(tes), 1000.0, 0.040))
+    dropout_last = clean.copy()
+    dropout_last[4] = 400.0  # rmse flags echo 5 -> 4
+    means = np.stack([clean, dropout_last], axis=0)
+    n_time = 10
+    perturb = 8.0 * np.tile([1.0, -1.0], n_time // 2)
+    data = means[:, :, np.newaxis] + perturb[np.newaxis, np.newaxis, :]
+
+    _, am_rmse = utils.make_adaptive_mask(data, threshold=1, methods=["rmse"], tes=tes)
+    _, am_drop = utils.make_adaptive_mask(data, threshold=1, methods=["dropout"])
+    _, am_both = utils.make_adaptive_mask(
+        data, threshold=1, methods=["rmse", "dropout"], tes=tes
+    )
+    assert np.array_equal(am_both, np.minimum(am_rmse, am_drop))
+    # rmse genuinely tightens the dropout voxel (dropout keeps echo 5, rmse does not).
+    assert am_both[1] <= am_rmse[1]
+
+
 # SMOKE TESTS
 
 
