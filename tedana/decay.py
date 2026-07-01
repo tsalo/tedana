@@ -112,6 +112,13 @@ def _rmse_good_echo_count(signal, sds, tes, k=3.0):
     -------
     :obj:`int`
         Estimated number of good leading echoes for the voxel.
+
+    Notes
+    -----
+    On real data this test can be aggressive: because a single-exponential model does
+    not perfectly describe multi-compartment tissue, high-tSNR voxels may have later
+    echoes trimmed from model misfit rather than true signal dropout. See
+    :func:`tedana.utils.make_adaptive_mask` for the user-facing caveat.
     """
     n_avail = len(signal)
     if n_avail < 3:
@@ -153,7 +160,7 @@ def _rmse_good_echo_count(signal, sds, tes, k=3.0):
     return n_avail
 
 
-def _get_rmse_adaptive_mask(echo_means, echo_sds, tes, k=3.0):
+def _get_rmse_adaptive_mask(echo_means, echo_sds, tes, k=3.0, n_threads=1):
     """Estimate good-echo counts per voxel from monoexponential fit quality.
 
     For each sample, count the leading echoes with positive, finite temporal-mean
@@ -171,6 +178,9 @@ def _get_rmse_adaptive_mask(echo_means, echo_sds, tes, k=3.0):
         Echo times in seconds.
     k : :obj:`float`, optional
         Residual tolerance in units of temporal standard deviation. Default is 3.0.
+    n_threads : :obj:`int`, optional
+        Number of workers for the per-voxel fits. ``None`` or ``<= 0`` uses all
+        available cores. Default is 1.
 
     Returns
     -------
@@ -189,17 +199,26 @@ def _get_rmse_adaptive_mask(echo_means, echo_sds, tes, k=3.0):
     good = np.isfinite(echo_means) & (echo_means > 0)
     n_leading_good = np.cumprod(good, axis=1).sum(axis=1).astype(int)
 
-    rmse_mask = np.zeros(n_samples, dtype=int)
-    for vox in range(n_samples):
-        n_avail = n_leading_good[vox]
-        rmse_mask[vox] = _rmse_good_echo_count(
-            echo_means[vox, :n_avail],
-            echo_sds[vox, :n_avail],
-            tes[:n_avail],
-            k,
-        )
+    if n_threads is None or n_threads <= 0:
+        n_threads = os.cpu_count() or 1
 
-    return rmse_mask
+    # Voxels with < 3 leading good echoes defer to their available count
+    # (matching _rmse_good_echo_count); only eligible voxels need fitting.
+    rmse_mask = n_leading_good.copy()
+    eligible = np.flatnonzero(n_leading_good >= 3)
+    if eligible.size:
+        results = Parallel(n_jobs=n_threads)(
+            delayed(_rmse_good_echo_count)(
+                echo_means[vox, : n_leading_good[vox]],
+                echo_sds[vox, : n_leading_good[vox]],
+                tes[: n_leading_good[vox]],
+                k,
+            )
+            for vox in eligible
+        )
+        rmse_mask[eligible] = results
+
+    return rmse_mask.astype(int)
 
 
 def _fit_single_voxel(voxel, echo_times_1d, data_column, s0_init, t2s_init, bounds):

@@ -781,6 +781,7 @@ def tedana_workflow(
         threshold=1,
         methods=masktype,
         tes=tes,
+        n_threads=n_threads,
     )
     LGR.debug(f"Retaining {mask_denoise.sum()}/{n_samp} samples for denoising")
     io_generator.save_file(masksum_denoise, "adaptive mask img")

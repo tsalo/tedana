@@ -31,7 +31,7 @@ RepLGR = logging.getLogger("REPORT")
 
 
 def make_adaptive_mask(
-    data, n_independent_echos=None, threshold=1, methods=["dropout"], tes=None
+    data, n_independent_echos=None, threshold=1, methods=["dropout"], tes=None, n_threads=1
 ):
     """Make map of `data` specifying longest echo a voxel can be sampled with.
 
@@ -52,6 +52,9 @@ def make_adaptive_mask(
     tes : (E,) :obj:`list` or :obj:`numpy.ndarray`, optional
         Echo times in seconds. Required when "rmse" is in ``methods``; unused otherwise.
         Default is None.
+    n_threads : :obj:`int`, optional
+        Number of workers used by the "rmse" method's per-voxel fits. ``None`` or
+        ``<= 0`` uses all available cores. Default is 1.
 
     Returns
     -------
@@ -107,6 +110,17 @@ def make_adaptive_mask(
     spacing, it is possible that a later echo will have a higher value,
     but the overall trend still shows a decay.
     This method should not be used in those situations.
+
+    RMSE
+
+    Fit the monoexponential decay to the leading echoes and extend echo by echo,
+    stopping at the first echo whose temporal-mean signal deviates from the fit by
+    more than three times that echo's temporal standard deviation. On real data this
+    can be aggressive: because a single-exponential model does not perfectly describe
+    multi-compartment tissue, high-tSNR voxels may have later echoes trimmed from
+    model misfit rather than true dropout. Inspect the adaptive mask before relying on
+    this method. Possible future refinements include a larger tolerance or adding a
+    model-misfit floor to the noise scale.
 
     The element-wise minimum value between any selected methods is used to construct the adaptive
     mask.
@@ -200,7 +214,9 @@ def make_adaptive_mask(
         from tedana.decay import _get_rmse_adaptive_mask
 
         echo_sds = data.std(axis=-1)  # temporal SD of echos (noise scale)
-        rmse_adaptive_mask = _get_rmse_adaptive_mask(echo_means, echo_sds, tes)
+        rmse_adaptive_mask = _get_rmse_adaptive_mask(
+            echo_means, echo_sds, tes, n_threads=n_threads
+        )
         adaptive_masks.append(rmse_adaptive_mask)
 
     # Retain the most conservative of the selected adaptive mask estimates

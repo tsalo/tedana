@@ -275,6 +275,12 @@ def test_make_adaptive_mask_rmse():
     assert adaptive_mask[0] == 5
     assert adaptive_mask[1] == 4
 
+    # n_threads must not change the result.
+    _, adaptive_mask_par = utils.make_adaptive_mask(
+        data, threshold=1, methods=["rmse"], tes=tes, n_threads=2
+    )
+    assert np.array_equal(adaptive_mask, adaptive_mask_par)
+
     # rmse requires tes.
     with pytest.raises(ValueError, match="tes"):
         utils.make_adaptive_mask(data, methods=["rmse"])

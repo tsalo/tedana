@@ -344,4 +344,21 @@ def test_get_rmse_adaptive_mask_counts_per_voxel():
     assert result[2] == 2
 
 
+def test_get_rmse_adaptive_mask_parallel_matches_serial():
+    """Parallel execution (n_threads>1) yields identical results to serial."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    clean = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    dropout_last = clean.copy()
+    dropout_last[4] = 400.0
+    two_good = clean.copy()
+    two_good[2:] = 0.0
+    echo_means = np.stack([clean, dropout_last, two_good], axis=0)
+    echo_sds = np.full((3, 5), 5.0)
+
+    serial = me._get_rmse_adaptive_mask(echo_means, echo_sds, tes, n_threads=1)
+    parallel = me._get_rmse_adaptive_mask(echo_means, echo_sds, tes, n_threads=2)
+    assert np.array_equal(serial, parallel)
+    assert list(serial) == [5, 4, 2]
+
+
 # TODO: BREAK AND UNIT TESTS
