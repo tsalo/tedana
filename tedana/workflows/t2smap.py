@@ -117,9 +117,12 @@ def _get_parser():
             "It identifies voxels that have good data in all vs a subset of echoes. "
             '"dropout" removes voxels with much lower voxels than other voxels within each echo. '
             '"decay" removes voxels where the raw signal does not decay across echoes. '
-            "Users can specify one, both, or neither of the models."
+            '"rmse" keeps the leading echoes whose monoexponential fit stays consistent with the '
+            "data, stopping at the first echo that deviates from the decay by more than its "
+            "temporal noise. "
+            "Users can specify one, several, or none of the models."
         ),
-        choices=["dropout", "decay", "none"],
+        choices=["dropout", "decay", "rmse", "none"],
         default=["dropout"],
     )
     masking_args.add_argument(
@@ -303,6 +306,7 @@ def t2smap_workflow(
         Default is to not exclude any volumes.
     masktype : :obj:`list` with 'dropout' and/or 'decay' or None, optional
         Method(s) by which to define the adaptive mask. Default is ["dropout"].
+        Valid methods are "dropout", "decay", "rmse", and "none".
     fittype : {'loglin', 'curvefit'}, optional
         Monoexponential fitting method.
         'loglin' means to use the the default linear fit to the log of
@@ -468,6 +472,7 @@ def t2smap_workflow(
         n_independent_echos=n_independent_echos,
         threshold=1,
         methods=masktype,
+        tes=tes,
     )
     LGR.debug(f"Retaining {mask_denoise.sum()}/{n_samp} samples for denoising")
     io_generator.save_file(masksum_denoise, "adaptive mask img")
