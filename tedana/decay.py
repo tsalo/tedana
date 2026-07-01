@@ -83,6 +83,67 @@ def monoexponential(tes, s0, t2star):
     return s0 * np.exp(-tes / t2star)
 
 
+def _rmse_best_n_echoes(signal, tes):
+    """Choose the echo count minimizing degrees-of-freedom-adjusted fit error.
+
+    For a single voxel, fit the monoexponential model to the first ``n`` echoes
+    (``n`` from 3 up to ``len(signal)``) using the per-echo temporal mean, and return
+    the ``n`` with the lowest reduced chi-squared (``SSE / (n - 2)``). ``n = 2`` is
+    excluded because a two-parameter model fits two points exactly (zero degrees of
+    freedom). Ties resolve to the larger echo count, so equally-good fits keep more
+    data. If fewer than three echoes are available, or every candidate fit fails, the
+    available echo count is returned (deferral).
+
+    Parameters
+    ----------
+    signal : (n,) :obj:`numpy.ndarray`
+        Per-echo temporal-mean signal, already truncated to a voxel's leading
+        positive/finite echoes.
+    tes : (n,) :obj:`numpy.ndarray`
+        Echo times in seconds, aligned with ``signal``.
+
+    Returns
+    -------
+    :obj:`int`
+        Estimated number of good leading echoes for the voxel.
+    """
+    n_avail = len(signal)
+    if n_avail < 3:
+        return n_avail
+
+    best_n = n_avail
+    best_score = np.inf
+    for n in range(3, n_avail + 1):
+        te_sub = tes[:n]
+        sig_sub = signal[:n]
+
+        # Two-point log-linear initial estimate for the nonlinear fit.
+        denom = np.log(sig_sub[0]) - np.log(sig_sub[-1])
+        t2s_init = (te_sub[-1] - te_sub[0]) / denom if denom > 0 else te_sub[-1]
+        if not np.isfinite(t2s_init) or t2s_init <= 0:
+            t2s_init = te_sub[-1]
+        s0_init = sig_sub[0] * np.exp(te_sub[0] / t2s_init)
+
+        try:
+            popt, _ = scipy.optimize.curve_fit(
+                monoexponential,
+                te_sub,
+                sig_sub,
+                p0=(s0_init, t2s_init),
+                bounds=((np.min(sig_sub), 0), (np.inf, np.inf)),
+            )
+        except (RuntimeError, ValueError):
+            continue
+
+        predicted = monoexponential(te_sub, popt[0], popt[1])
+        reduced_chi2 = np.sum((sig_sub - predicted) ** 2) / (n - 2)
+        if reduced_chi2 <= best_score:
+            best_score = reduced_chi2
+            best_n = n
+
+    return best_n
+
+
 def _fit_single_voxel(voxel, echo_times_1d, data_column, s0_init, t2s_init, bounds):
     """Fit monoexponential model for a single voxel.
 

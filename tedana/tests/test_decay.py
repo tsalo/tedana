@@ -227,4 +227,38 @@ def test_smoke_fit_decay_curvefit_ts():
     assert t2s_s0_covar.ndim == 2
 
 
+def test_rmse_best_n_echoes_clean_decay_picks_all():
+    """A clean monoexponential decay uses every echo."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    assert me._rmse_best_n_echoes(signal, tes) == 5
+
+
+def test_rmse_best_n_echoes_bad_final_echo_drops_it():
+    """A corrupted final echo is excluded, keeping N-1 echoes."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    signal[4] = signal[3] * 3.0  # break the decay at the last echo
+    assert me._rmse_best_n_echoes(signal, tes) == 4
+
+
+def test_rmse_best_n_echoes_fewer_than_three_defers():
+    """With fewer than three echoes the scorer returns the available count."""
+    tes = np.array([0.015, 0.030])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    assert me._rmse_best_n_echoes(signal, tes) == 2
+
+
+def test_rmse_best_n_echoes_all_fits_fail_defers(monkeypatch):
+    """When every curve_fit raises, the scorer defers to the available count."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(me.scipy.optimize, "curve_fit", _raise)
+    assert me._rmse_best_n_echoes(signal, tes) == 4
+
+
 # TODO: BREAK AND UNIT TESTS
