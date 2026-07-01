@@ -274,6 +274,54 @@ def test_rmse_good_echo_count_seed_fit_failure_defers(monkeypatch):
     assert me._rmse_good_echo_count(signal, sds, tes) == 4
 
 
+def test_rmse_good_echo_count_later_fit_failure_returns_confirmed(monkeypatch):
+    """A fit failure after the seed returns the count confirmed so far, not n_avail."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    sds = np.full(5, 5.0)
+
+    real_curve_fit = me.scipy.optimize.curve_fit
+    calls = {"n": 0}
+
+    def _fail_after_first(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_curve_fit(*args, **kwargs)  # seed fit (echoes 1-3) succeeds
+        raise RuntimeError("forced later failure")
+
+    monkeypatch.setattr(me.scipy.optimize, "curve_fit", _fail_after_first)
+    # n=4 iteration: seed fit succeeds, echo 4 accepted (good) -> confirmed=4.
+    # n=5 iteration: fit of echoes 1-4 raises -> return n-1 == 4.
+    assert me._rmse_good_echo_count(signal, sds, tes) == 4
+
+
+def test_rmse_good_echo_count_threshold_discriminates_near_boundary():
+    """A residual below k*sigma is kept; one above k*sigma is rejected."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    clean = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    sigma = 5.0
+    sds = np.full(5, sigma)
+    predicted5 = me.monoexponential(tes[4], 1000.0, 0.040)  # fit of exact echoes 1-4 recovers this
+
+    kept = clean.copy()
+    kept[4] = predicted5 + 2.0 * sigma  # residual 2*sigma < k*sigma (=15) -> keep echo 5
+    assert me._rmse_good_echo_count(kept, sds, tes) == 5
+
+    rejected = clean.copy()
+    rejected[4] = predicted5 + 4.0 * sigma  # residual 4*sigma >= 15 -> reject echo 5
+    assert me._rmse_good_echo_count(rejected, sds, tes) == 4
+
+
+def test_rmse_good_echo_count_nonfinite_sigma_guard_keeps_echo():
+    """A non-finite sigma (like zero) disables the test, so the echo is kept."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    signal = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+    signal[4] = 400.0  # would be rejected if sigma allowed a test
+    sds = np.full(5, 5.0)
+    sds[4] = np.nan
+    assert me._rmse_good_echo_count(signal, sds, tes) == 5
+
+
 def test_get_rmse_adaptive_mask_counts_per_voxel():
     """Wrapper returns per-voxel good-echo counts from means, SDs, and tes."""
     tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
