@@ -144,6 +144,45 @@ def _rmse_best_n_echoes(signal, tes):
     return best_n
 
 
+def _get_rmse_adaptive_mask(echo_means, tes):
+    """Estimate good-echo counts per voxel from monoexponential fit quality.
+
+    For each sample, count the leading echoes with positive, finite temporal-mean
+    signal and pass that truncation to :func:`_rmse_best_n_echoes`, which selects the
+    echo count minimizing degrees-of-freedom-adjusted fit error.
+
+    Parameters
+    ----------
+    echo_means : (S x E) :obj:`numpy.ndarray`
+        Per-echo temporal-mean signal for each sample.
+    tes : (E,) array_like
+        Echo times in seconds.
+
+    Returns
+    -------
+    (S,) :obj:`numpy.ndarray` of :obj:`int`
+        Estimated number of good leading echoes per voxel.
+
+    See Also
+    --------
+    :func:`tedana.utils.make_adaptive_mask` : Consumer that combines this with other
+        adaptive-mask methods.
+    """
+    tes = np.asarray(tes, dtype=float)
+    n_samples = echo_means.shape[0]
+
+    # Leading run of positive, finite echoes per voxel.
+    good = np.isfinite(echo_means) & (echo_means > 0)
+    n_leading_good = np.cumprod(good, axis=1).sum(axis=1).astype(int)
+
+    rmse_mask = np.zeros(n_samples, dtype=int)
+    for vox in range(n_samples):
+        n_avail = n_leading_good[vox]
+        rmse_mask[vox] = _rmse_best_n_echoes(echo_means[vox, :n_avail], tes[:n_avail])
+
+    return rmse_mask
+
+
 def _fit_single_voxel(voxel, echo_times_1d, data_column, s0_init, t2s_init, bounds):
     """Fit monoexponential model for a single voxel.
 

@@ -261,4 +261,25 @@ def test_rmse_best_n_echoes_all_fits_fail_defers(monkeypatch):
     assert me._rmse_best_n_echoes(signal, tes) == 4
 
 
+def test_get_rmse_adaptive_mask_counts_per_voxel():
+    """Wrapper returns per-voxel good-echo counts from the temporal means."""
+    tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
+    clean = me.monoexponential(tes, s0=1000.0, t2star=0.040)
+
+    bad_last = clean.copy()
+    bad_last[4] = bad_last[3] * 3.0  # breaks decay at echo 5 -> expect 4
+
+    two_good = clean.copy()
+    two_good[2:] = 0.0  # only two leading positive echoes -> defer to 2
+
+    echo_means = np.stack([clean, bad_last, two_good], axis=0)
+    result = me._get_rmse_adaptive_mask(echo_means, tes)
+
+    assert result.shape == (3,)
+    assert result.dtype.kind == "i"
+    assert result[0] == 5
+    assert result[1] == 4
+    assert result[2] == 2
+
+
 # TODO: BREAK AND UNIT TESTS
