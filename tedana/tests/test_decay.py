@@ -275,18 +275,19 @@ def test_rmse_good_echo_count_seed_fit_failure_defers(monkeypatch):
 
 
 def test_get_rmse_adaptive_mask_counts_per_voxel():
-    """Wrapper returns per-voxel good-echo counts from the temporal means."""
+    """Wrapper returns per-voxel good-echo counts from means, SDs, and tes."""
     tes = np.array([0.015, 0.030, 0.045, 0.060, 0.075])
     clean = me.monoexponential(tes, s0=1000.0, t2star=0.040)
 
-    bad_last = clean.copy()
-    bad_last[4] = bad_last[3] * 3.0  # breaks decay at echo 5 -> expect 4
+    dropout_last = clean.copy()
+    dropout_last[4] = 400.0  # residual >> 3*sigma -> expect 4
 
     two_good = clean.copy()
     two_good[2:] = 0.0  # only two leading positive echoes -> defer to 2
 
-    echo_means = np.stack([clean, bad_last, two_good], axis=0)
-    result = me._get_rmse_adaptive_mask(echo_means, tes)
+    echo_means = np.stack([clean, dropout_last, two_good], axis=0)
+    echo_sds = np.full((3, 5), 5.0)
+    result = me._get_rmse_adaptive_mask(echo_means, echo_sds, tes)
 
     assert result.shape == (3,)
     assert result.dtype.kind == "i"

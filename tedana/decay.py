@@ -153,19 +153,24 @@ def _rmse_good_echo_count(signal, sds, tes, k=3.0):
     return n_avail
 
 
-def _get_rmse_adaptive_mask(echo_means, tes):
+def _get_rmse_adaptive_mask(echo_means, echo_sds, tes, k=3.0):
     """Estimate good-echo counts per voxel from monoexponential fit quality.
 
     For each sample, count the leading echoes with positive, finite temporal-mean
-    signal and pass that truncation to :func:`_rmse_best_n_echoes`, which selects the
-    echo count minimizing degrees-of-freedom-adjusted fit error.
+    signal and pass that truncation (means, SDs, and echo times) to
+    :func:`_rmse_good_echo_count`, which extends the fit until an echo deviates from
+    the decay by more than ``k`` times its temporal standard deviation.
 
     Parameters
     ----------
     echo_means : (S x E) :obj:`numpy.ndarray`
         Per-echo temporal-mean signal for each sample.
+    echo_sds : (S x E) :obj:`numpy.ndarray`
+        Per-echo temporal standard deviation for each sample.
     tes : (E,) array_like
         Echo times in seconds.
+    k : :obj:`float`, optional
+        Residual tolerance in units of temporal standard deviation. Default is 3.0.
 
     Returns
     -------
@@ -187,7 +192,12 @@ def _get_rmse_adaptive_mask(echo_means, tes):
     rmse_mask = np.zeros(n_samples, dtype=int)
     for vox in range(n_samples):
         n_avail = n_leading_good[vox]
-        rmse_mask[vox] = _rmse_best_n_echoes(echo_means[vox, :n_avail], tes[:n_avail])
+        rmse_mask[vox] = _rmse_good_echo_count(
+            echo_means[vox, :n_avail],
+            echo_sds[vox, :n_avail],
+            tes[:n_avail],
+            k,
+        )
 
     return rmse_mask
 
