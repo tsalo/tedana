@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from tedana import utils
+from tedana.decay import monoexponential as utils_decay_monoexp
 
 rs = np.random.RandomState(1234)
 datadir = pjoin(dirname(__file__), "data")
@@ -246,6 +247,35 @@ def test_make_adaptive_mask(caplog):
         "The degrees of freedom for fits across echoes will remain 4 even if "
         "there might be fewer independent echo measurements."
     ) in caplog.text
+
+
+def test_make_adaptive_mask_rmse():
+    """The rmse method selects good-echo counts and combines via element-wise min."""
+    tes = np.asarray([0.015, 0.030, 0.045, 0.060, 0.075])
+    clean = utils_decay_monoexp(tes, 1000.0, 0.040)
+
+    bad_last = clean.copy()
+    bad_last[4] = bad_last[3] * 3.0  # rmse -> 4
+
+    # Build (n_voxels, n_echos, n_time) data with a single time point per echo, so
+    # that the temporal mean taken inside make_adaptive_mask exactly recovers these
+    # values (avoiding floating-point drift from averaging repeated values, which is
+    # large enough to flip the sensitive nonlinear fit in ``_rmse_best_n_echoes``).
+    means = np.stack([clean, bad_last], axis=0)
+    data = means[:, :, np.newaxis]
+
+    mask, adaptive_mask = utils.make_adaptive_mask(
+        data,
+        threshold=1,
+        methods=["rmse"],
+        tes=tes,
+    )
+    assert adaptive_mask[0] == 5
+    assert adaptive_mask[1] == 4
+
+    # rmse requires tes.
+    with pytest.raises(ValueError, match="tes"):
+        utils.make_adaptive_mask(data, methods=["rmse"])
 
 
 # SMOKE TESTS

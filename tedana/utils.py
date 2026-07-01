@@ -30,7 +30,9 @@ LGR = logging.getLogger("GENERAL")
 RepLGR = logging.getLogger("REPORT")
 
 
-def make_adaptive_mask(data, n_independent_echos=None, threshold=1, methods=["dropout"]):
+def make_adaptive_mask(
+    data, n_independent_echos=None, threshold=1, methods=["dropout"], tes=None
+):
     """Make map of `data` specifying longest echo a voxel can be sampled with.
 
     Parameters
@@ -46,7 +48,10 @@ def make_adaptive_mask(data, n_independent_echos=None, threshold=1, methods=["dr
         Default is 1, which is equivalent to not thresholding.
     methods : :obj:`list`, optional
         List of methods to use for adaptive mask generation. Default is ["dropout"].
-        Valid methods are "decay", "dropout", and "none".
+        Valid methods are "decay", "dropout", "rmse", and "none".
+    tes : (E,) :obj:`list` or :obj:`numpy.ndarray`, optional
+        Echo times in seconds. Required when "rmse" is in ``methods``; unused otherwise.
+        Default is None.
 
     Returns
     -------
@@ -124,7 +129,10 @@ def make_adaptive_mask(data, n_independent_echos=None, threshold=1, methods=["dr
             f"An adaptive mask was then generated using the {'+'.join(methods)} method(s), "
             "in which each voxel's value reflects the number of echoes with 'good' data."
         )
-    assert all([method.lower() in ["decay", "dropout", "none"] for method in methods])
+    assert all([method.lower() in ["decay", "dropout", "rmse", "none"] for method in methods])
+
+    if ("rmse" in methods) and (tes is None):
+        raise ValueError("`tes` must be provided when the 'rmse' method is requested.")
 
     n_samples, n_echos, _ = data.shape
     adaptive_masks = []
@@ -143,7 +151,7 @@ def make_adaptive_mask(data, n_independent_echos=None, threshold=1, methods=["dr
 
     adaptive_masks.append(base_adaptive_mask)
 
-    if ("dropout" in methods) or ("decay" in methods):
+    if ("dropout" in methods) or ("decay" in methods) or ("rmse" in methods):
         echo_means = data.mean(axis=-1)  # temporal mean of echos
 
     if "dropout" in methods:
@@ -187,6 +195,12 @@ def make_adaptive_mask(data, n_independent_echos=None, threshold=1, methods=["dr
         last_decreasing_echo = diff_mask.argmax(axis=1)
         last_decreasing_echo[last_decreasing_echo == 0] = n_echos  # if no increase, set to n_echos
         adaptive_masks.append(last_decreasing_echo)
+
+    if "rmse" in methods:
+        from tedana.decay import _get_rmse_adaptive_mask
+
+        rmse_adaptive_mask = _get_rmse_adaptive_mask(echo_means, tes)
+        adaptive_masks.append(rmse_adaptive_mask)
 
     # Retain the most conservative of the selected adaptive mask estimates
     adaptive_mask = np.minimum.reduce(adaptive_masks)
