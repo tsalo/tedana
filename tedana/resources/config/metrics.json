@@ -103,6 +103,14 @@
             "data_optcom",
             "map optcom betas"
         ],
+        "grappa_artifact": [
+            "map percent signal change",
+            "mask"
+        ],
+        "grappa_artifact_fraction": [
+            "grappa_artifact",
+            "mask"
+        ],
         "map weight clusterized": [
             "map weight",
             "mask",

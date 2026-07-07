@@ -10,7 +10,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from tedana import io, utils
-from tedana.metrics import dependence, external
+from tedana.metrics import dependence, external, spatial
 from tedana.metrics._utils import (
     add_external_dependencies,
     dependency_resolver,
@@ -185,6 +185,19 @@ def generate_metrics(
         metric_maps["map percent signal change"] = dependence.calculate_psc(
             data_optcom=data_optcom,
             optcom_betas=metric_maps["map optcom betas"],
+        )
+
+    if "grappa_artifact" in required_metrics:
+        LGR.info("Calculating GRAPPA (in-plane acceleration) artifact metric")
+        component_table["grappa_artifact"] = spatial.compute_grappa_artifact(
+            psc_maps=metric_maps["map percent signal change"],
+            mask_img=mask_img,
+        )
+
+    if "grappa_artifact_fraction" in required_metrics:
+        n_mask_voxels = int(np.asanyarray(mask_img.dataobj).astype(bool).sum())
+        component_table["grappa_artifact_fraction"] = component_table["grappa_artifact"] / (
+            3 * n_mask_voxels
         )
 
     if "map univariate Z statistics" in required_metrics:
