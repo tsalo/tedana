@@ -427,6 +427,99 @@ def _create_varexp_pie_plt(comptable_cds, n_total, n_accepted, n_rejected):
     return fig
 
 
+def _create_varexp_pareto_plt(comptable_cds):
+    """Create a Pareto view (variance bars + cumulative %) of the components.
+
+    The bars share ``comptable_cds`` with the pie/scatter/scree plots, so the existing
+    tap-to-select linkage keeps working. The cumulative line is drawn from a separate
+    source ordered by descending variance so that it renders as a monotonic Pareto curve
+    (a Bokeh line connects points in data-source order, and the shared CDS is ordered by
+    classification, not variance).
+
+    Parameters
+    ----------
+    comptable_cds : bokeh.models.ColumnDataSource
+        The shared component data source built by ``_create_data_struct``.
+
+    Returns
+    -------
+    fig : bokeh.plotting.figure.Figure
+    """
+    data = comptable_cds.data
+    components = [str(c) for c in data["component"]]
+    varexp = np.array(data["varexp"], dtype=float)
+
+    # Descending-variance order for the x-axis and the cumulative line.
+    order = np.argsort(varexp)[::-1]
+    x_order = [components[i] for i in order]
+    cumulative = np.cumsum(varexp[order])
+    line_source = models.ColumnDataSource(
+        data=dict(component=x_order, varexp_cumulative=list(cumulative))
+    )
+
+    fig = plotting.figure(
+        width=400,
+        height=400,
+        title="Variance Explained View",
+        x_range=models.FactorRange(*x_order),
+        tools=["save"],
+    )
+
+    bars = fig.vbar(
+        x="component",
+        top="varexp",
+        width=0.8,
+        source=comptable_cds,
+        fill_color="color",
+        line_color="white",
+        fill_alpha=0.7,
+    )
+
+    fig.add_tools(
+        models.HoverTool(
+            tooltips=[
+                ("Component ID", "@component"),
+                ("Kappa", "@kappa{0.00}"),
+                ("Rho", "@rho{0.00}"),
+                ("Var. Expl.", "@varexp{0.00}%"),
+                ("Var. Expl. by Rej.", "@varexprej{0.00}%"),
+                ("Tags", "@classtag"),
+            ],
+            renderers=[bars],
+        ),
+        models.TapTool(mode="replace", renderers=[bars]),
+    )
+
+    # Secondary axis for the cumulative percentage.
+    fig.extra_y_ranges = {"cumulative": models.Range1d(start=0, end=100)}
+    fig.add_layout(
+        models.LinearAxis(y_range_name="cumulative", axis_label="Cumulative variance (%)"),
+        "right",
+    )
+    fig.line(
+        x="component",
+        y="varexp_cumulative",
+        source=line_source,
+        y_range_name="cumulative",
+        line_color="#000033",
+        line_width=2,
+    )
+    fig.scatter(
+        x="component",
+        y="varexp_cumulative",
+        source=line_source,
+        y_range_name="cumulative",
+        size=5,
+        color="#000033",
+    )
+
+    fig.xaxis.axis_label = "Component"
+    fig.xaxis.major_label_orientation = pi / 4
+    fig.yaxis[0].axis_label = "Variance explained (%)"
+    fig.toolbar.logo = None
+    return fig
+
+
 def _tap_callback(comptable_cds, div_content, io_generator):
     """
     Javacript function to animate tap events and show component info on the right.

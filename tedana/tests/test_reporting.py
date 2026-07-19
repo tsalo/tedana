@@ -259,3 +259,44 @@ def test_generate_tree_tables(tmp_path):
     assert "kappa, rho" in tree_table
     assert "pure-table" in tree_table
     assert "ICA_00" in status_table
+
+
+def test_create_varexp_pareto_plt_structure():
+    from bokeh import models
+
+    from tedana.reporting import dynamic_figures as df_mod
+
+    # Shared-CDS-like source with the fields the Pareto figure reads/hovers.
+    cds = models.ColumnDataSource(
+        data=dict(
+            component=["0", "1", "2"],
+            varexp=[20.0, 50.0, 30.0],
+            varexprej=[0.0, 0.0, 0.0],
+            kappa=[10.0, 40.0, 25.0],
+            rho=[5.0, 8.0, 6.0],
+            color=["#009E73", "#D55E00", "#0072B2"],
+            classtag=["", "", ""],
+        )
+    )
+
+    fig = df_mod._create_varexp_pareto_plt(cds)
+
+    # Bars come from the shared CDS (so selection stays linked).
+    bar_renderers = [r for r in fig.renderers if isinstance(r.glyph, models.VBar)]
+    assert len(bar_renderers) == 1
+    assert bar_renderers[0].data_source is cds
+
+    # A cumulative line exists on a separate source, ordered by descending variance,
+    # non-decreasing, ending at the total (~100 for real data; here 100.0).
+    line_renderers = [r for r in fig.renderers if isinstance(r.glyph, models.Line)]
+    assert len(line_renderers) == 1
+    line_src = line_renderers[0].data_source
+    assert line_src is not cds
+    assert list(line_src.data["component"]) == ["1", "2", "0"]  # 50, 30, 20 descending
+    cumulative = list(line_src.data["varexp_cumulative"])
+    assert cumulative == sorted(cumulative)  # non-decreasing
+    assert cumulative[-1] == 100.0
+
+    # Secondary axis for the cumulative percentage, and tap-select present.
+    assert "cumulative" in fig.extra_y_ranges
+    assert any(isinstance(t, models.TapTool) for t in fig.tools)
