@@ -487,6 +487,13 @@ def generate_report(io_generator: OutputGenerator, cluster_labels, similarity_t_
         n_accepted=n_accepted,
         n_rejected=n_rejected,
     )
+    varexp_pareto_plot = df._create_varexp_pareto_plt(comptable_cds)
+    varexp_view = models.Tabs(
+        tabs=[
+            models.TabPanel(child=varexp_pie_plot, title="Pie"),
+            models.TabPanel(child=varexp_pareto_plot, title="Pareto"),
+        ]
+    )
 
     # Create clustering plot
     if cluster_labels is not None:
@@ -500,7 +507,13 @@ def generate_report(io_generator: OutputGenerator, cluster_labels, similarity_t_
         tsne_html = ""
 
     # link all dynamic figures
-    figs = [kappa_rho_plot, kappa_sorted_plot, rho_sorted_plot, varexp_pie_plot]
+    figs = [
+        kappa_rho_plot,
+        kappa_sorted_plot,
+        rho_sorted_plot,
+        varexp_pie_plot,
+        varexp_pareto_plot,
+    ]
 
     div_content = models.Div(width=500, height=750, height_policy="fixed")
 
@@ -513,7 +526,7 @@ def generate_report(io_generator: OutputGenerator, cluster_labels, similarity_t_
             [
                 layouts.row(
                     layouts.column(
-                        layouts.row(kappa_rho_plot, varexp_pie_plot),
+                        layouts.row(kappa_rho_plot, varexp_view),
                         layouts.row(rho_sorted_plot, kappa_sorted_plot),
                     ),
                     layouts.column(div_content),
