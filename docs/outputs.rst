@@ -359,6 +359,11 @@ information for an individual component. One can hover over any pie chart wedge
 or data point in the summary view to see additional information about a
 component. Clicking on a component will select the component and the additional
 information will appear to the right.
+The variance-explained view offers two tabs that share this click-to-select
+behavior: a **Pie** chart (the default) and a **Pareto** view, which shows the
+components as variance-explained bars sorted from largest to smallest with a
+cumulative-percentage line, making it easier to read how few components carry
+most of the variance.
 The left and right arrow keys cycle through compononents in the order they appear on the pie chart.
 
 .. image:: /_static/rep01_overallview.png
