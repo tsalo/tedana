@@ -70,9 +70,10 @@ tests = [
     "pytest-cov>=4",
     "requests>=2.31",
 ]
+transforms = ["antspyx>=0.6.1; python_version < '3.14'"]
 
 # Aliases
-all = ["tedana[dev,doc,tests]"]
+all = ["tedana[dev,doc,tests,transforms]"]
 
 [project.scripts]
 ica_reclassify = "tedana.workflows.ica_reclassify:_main"

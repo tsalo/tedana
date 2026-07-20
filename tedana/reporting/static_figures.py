@@ -43,6 +43,17 @@ def _trim_edge_zeros(arr):
     return arr[bounding_box]
 
 
+def _prepare_img(img, figure_space, *, interpolation="linear", imagetype=None):
+    """Load an image and optionally transform it into report-figure space."""
+    if figure_space is None:
+        return image.load_img(img)
+    return figure_space.transform(
+        img,
+        interpolation=interpolation,
+        imagetype=imagetype,
+    )
+
+
 def carpet_plot(
     optcom_ts,
     denoised_ts,
@@ -51,6 +62,7 @@ def carpet_plot(
     mask,
     io_generator,
     gscontrol=None,
+    figure_space=None,
 ):
     """Generate a set of carpet plots for the combined and denoised data.
 
@@ -67,17 +79,33 @@ def carpet_plot(
         If any gscontrol methods were applied, then additional carpet plots will be generated for
         pertinent outputs from those steps.
         Default is None.
+    figure_space : :obj:`tedana.reporting.figure_space.FigureSpace`, optional
+        Configuration for transforming images used in report figures.
     """
     optcom_img = masking.unmask(optcom_ts.T, io_generator.mask)
     dn_img = masking.unmask(denoised_ts.T, io_generator.mask)
     hik_img = masking.unmask(hikts.T, io_generator.mask)
     lowk_img = masking.unmask(lowkts.T, io_generator.mask)
 
+    optcom_img = _prepare_img(optcom_img, figure_space, imagetype=3)
+    dn_img = _prepare_img(dn_img, figure_space, imagetype=3)
+    hik_img = _prepare_img(hik_img, figure_space, imagetype=3)
+    lowk_img = _prepare_img(lowk_img, figure_space, imagetype=3)
+    if figure_space is not None and figure_space.dseg is not None:
+        carpet_mask = figure_space.dseg
+        mask_labels = figure_space.mask_labels
+    else:
+        carpet_mask = _prepare_img(mask, figure_space, interpolation="genericLabel")
+        mask_labels = None
+    t_r = io_generator.reference_img.header.get_zooms()[-1]
+
     # Carpet plots
     fig, ax = plt.subplots(figsize=(14, 7))
     plotting.plot_carpet(
         optcom_img,
-        mask,
+        carpet_mask,
+        mask_labels=mask_labels,
+        t_r=t_r,
         figure=fig,
         axes=ax,
         standardize="zscore_sample",
@@ -92,7 +120,9 @@ def carpet_plot(
     fig, ax = plt.subplots(figsize=(14, 7))
     plotting.plot_carpet(
         dn_img,
-        mask,
+        carpet_mask,
+        mask_labels=mask_labels,
+        t_r=t_r,
         figure=fig,
         axes=ax,
         standardize="zscore_sample",
@@ -107,7 +137,9 @@ def carpet_plot(
     fig, ax = plt.subplots(figsize=(14, 7))
     plotting.plot_carpet(
         hik_img,
-        mask,
+        carpet_mask,
+        mask_labels=mask_labels,
+        t_r=t_r,
         figure=fig,
         axes=ax,
         standardize="zscore_sample",
@@ -122,7 +154,9 @@ def carpet_plot(
     fig, ax = plt.subplots(figsize=(14, 7))
     plotting.plot_carpet(
         lowk_img,
-        mask,
+        carpet_mask,
+        mask_labels=mask_labels,
+        t_r=t_r,
         figure=fig,
         axes=ax,
         standardize="zscore_sample",
@@ -136,10 +170,13 @@ def carpet_plot(
 
     if (gscontrol is not None) and ("gsr" in gscontrol):
         optcom_with_gs_img = io_generator.get_name("has gs combined img")
+        optcom_with_gs_img = _prepare_img(optcom_with_gs_img, figure_space, imagetype=3)
         fig, ax = plt.subplots(figsize=(14, 7))
         plotting.plot_carpet(
             optcom_with_gs_img,
-            mask,
+            carpet_mask,
+            mask_labels=mask_labels,
+            t_r=t_r,
             figure=fig,
             axes=ax,
             standardize="zscore_sample",
@@ -157,10 +194,13 @@ def carpet_plot(
 
     if (gscontrol is not None) and ("mir" in gscontrol):
         mir_denoised_img = io_generator.get_name("mir denoised img")
+        mir_denoised_img = _prepare_img(mir_denoised_img, figure_space, imagetype=3)
         fig, ax = plt.subplots(figsize=(14, 7))
         plotting.plot_carpet(
             mir_denoised_img,
-            mask,
+            carpet_mask,
+            mask_labels=mask_labels,
+            t_r=t_r,
             figure=fig,
             axes=ax,
             standardize="zscore_sample",
@@ -178,10 +218,13 @@ def carpet_plot(
 
         if io_generator.verbose:
             mir_denoised_img = io_generator.get_name("ICA accepted mir denoised img")
+            mir_denoised_img = _prepare_img(mir_denoised_img, figure_space, imagetype=3)
             fig, ax = plt.subplots(figsize=(14, 7))
             plotting.plot_carpet(
                 mir_denoised_img,
-                mask,
+                carpet_mask,
+                mask_labels=mask_labels,
+                t_r=t_r,
                 figure=fig,
                 axes=ax,
                 standardize="zscore_sample",
@@ -333,7 +376,7 @@ def plot_component(
     plt.close(fig)
 
 
-def comp_figures(ts, component_table, mixing, io_generator, png_cmap):
+def comp_figures(ts, component_table, mixing, io_generator, png_cmap, figure_space=None):
     """Create static figures that highlight certain aspects of tedana processing.
 
     This includes a figure for each component showing the component time course,
@@ -355,8 +398,9 @@ def comp_figures(ts, component_table, mixing, io_generator, png_cmap):
     """
     # regenerate the beta images
     component_maps_arr = stats.get_coeffs(ts, mixing)
-    component_maps_arr = masking.unmask(component_maps_arr.T, io_generator.mask)
-    component_maps_arr = component_maps_arr.get_fdata()
+    component_maps_img = masking.unmask(component_maps_arr.T, io_generator.mask)
+    component_maps_img = _prepare_img(component_maps_img, figure_space, imagetype=3)
+    component_maps_arr = component_maps_img.get_fdata()
 
     # Get repetition time from reference image
     tr = io_generator.reference_img.header.get_zooms()[-1]
@@ -399,8 +443,7 @@ def comp_figures(ts, component_table, mixing, io_generator, png_cmap):
         )
         component_img = nb.Nifti1Image(
             component_maps_arr[:, :, :, compnum],
-            affine=io_generator.reference_img.affine,
-            header=io_generator.reference_img.header,
+            affine=component_maps_img.affine,
         )
 
         component_timeseries = mixing[:, compnum]
@@ -569,6 +612,7 @@ def plot_t2star_and_s0(
     *,
     io_generator: io.OutputGenerator,
     mask: nb.Nifti1Image,
+    figure_space=None,
 ) -> None:
     """Create T2* and S0 maps and histograms.
 
@@ -579,17 +623,21 @@ def plot_t2star_and_s0(
     mask : img
         Binary mask image used to apply to the data.
     """
-    t2star_img = io_generator.get_name("t2star img")
-    s0_img = io_generator.get_name("s0 img")
-    assert os.path.isfile(t2star_img), f"File {t2star_img} does not exist"
+    t2star_file = io_generator.get_name("t2star img")
+    s0_file = io_generator.get_name("s0 img")
+    assert os.path.isfile(t2star_file), f"File {t2star_file} does not exist"
 
     # Check if S0 image exists, add message to log if not
-    s0_exists = os.path.isfile(s0_img)
+    s0_exists = os.path.isfile(s0_file)
     if not s0_exists:
         LGR.info(
             "S0 maps and T2* fit metrics are not in report since a pre-existing "
             "T2* map was provided"
         )
+
+    mask = _prepare_img(mask, figure_space, interpolation="genericLabel")
+    t2star_img = _prepare_img(t2star_file, figure_space)
+    s0_img = _prepare_img(s0_file, figure_space) if s0_exists else None
 
     # Plot histograms
     t2star_data = masking.apply_mask(t2star_img, mask)
@@ -665,6 +713,7 @@ def plot_t2star_and_s0(
 def plot_rmse(
     *,
     io_generator: io.OutputGenerator,
+    figure_space=None,
 ):
     """Plot the residual mean squared error map and time series for the monoexponential model fit.
 
@@ -680,6 +729,8 @@ def plot_rmse(
     mask_img = io_generator.get_name("adaptive mask img")
     # At least 2 good echoes
     mask_img = image.binarize_img(mask_img, threshold=1.5, two_sided=False, copy_header=True)
+    rmse_img = _prepare_img(rmse_img, figure_space)
+    mask_img = _prepare_img(mask_img, figure_space, interpolation="genericLabel")
 
     rmse_data = masking.apply_mask(rmse_img, mask_img)
     rmse_p02, rmse_p98 = np.percentile(rmse_data, [2, 98])
@@ -751,6 +802,7 @@ def plot_adaptive_mask(
     *,
     optcom: np.ndarray,
     io_generator: io.OutputGenerator,
+    figure_space=None,
 ):
     """Create a figure to show the adaptive mask.
 
@@ -786,6 +838,10 @@ def plot_adaptive_mask(
         two_sided=False,
         copy_header=True,
     )
+    mean_optcom_img = _prepare_img(mean_optcom_img, figure_space)
+    mask_denoise = _prepare_img(mask_denoise, figure_space, interpolation="genericLabel")
+    mask_clf = _prepare_img(mask_clf, figure_space, interpolation="genericLabel")
+    base_mask = _prepare_img(io_generator.mask, figure_space, interpolation="genericLabel")
 
     color_dict = {
         "Initial mask only": "#DC267F",
@@ -818,7 +874,7 @@ def plot_adaptive_mask(
             linewidths=1.5,
         )
         ob.add_contours(
-            io_generator.mask,
+            base_mask,
             threshold=0.2,
             levels=[0.5],
             colors=[color_dict["Initial mask only"]],
@@ -858,6 +914,7 @@ def plot_gscontrol(
     io_generator: io.OutputGenerator,
     gscontrol: list,
     png_cmap: str,
+    figure_space=None,
 ):
     """Plot the results of the gscontrol steps.
 
@@ -878,7 +935,7 @@ def plot_gscontrol(
         tr = io_generator.reference_img.header.get_zooms()[-1]
 
     if "gsr" in gscontrol:
-        gsr_img = nb.load(io_generator.get_name("gs img"))
+        gsr_img = _prepare_img(io_generator.get_name("gs img"), figure_space)
 
         # Get fft and freqs for this component
         # adapted from @dangom
@@ -901,7 +958,7 @@ def plot_gscontrol(
         )
 
     if "mir" in gscontrol:
-        mir_img = nb.load(io_generator.get_name("t1 like img"))
+        mir_img = _prepare_img(io_generator.get_name("t1 like img"), figure_space)
 
         # Get fft and freqs for this component
         # adapted from @dangom
@@ -1174,6 +1231,7 @@ def _correlate_dataframes(df1, df2):
 def plot_decay_variance(
     *,
     io_generator: io.OutputGenerator,
+    figure_space=None,
 ):
     """Plot the variance of the T2* and S0 estimates.
 
@@ -1190,6 +1248,7 @@ def plot_decay_variance(
         two_sided=False,
         copy_header=True,
     )
+    mask_img = _prepare_img(mask_img, figure_space, interpolation="genericLabel")
 
     names = [
         "stat-variance_desc-t2star_statmap",
@@ -1199,6 +1258,7 @@ def plot_decay_variance(
     imgs = ["t2star variance img", "s0 variance img", "t2star-s0 covariance img"]
     for name, img in zip(names, imgs):
         in_file = io_generator.get_name(img)
+        in_file = _prepare_img(in_file, figure_space)
         data = masking.apply_mask(in_file, mask_img)
         data_p02, data_p98 = np.percentile(data, [2, 98])
         plot_name = f"{io_generator.prefix}{name}.svg"

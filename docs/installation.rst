@@ -11,6 +11,18 @@ If you already have a python environment and you want to add tedana, type:
 
 As long as your python environment contains a compatible version of python, this should work.
 
+Transforming report figures into a reference space requires the optional ANTsPyX dependency:
+
+.. code-block:: bash
+
+  pip install "tedana[transforms]"
+
+This extra is only needed when using the ``--xfms`` and ``--reference`` options.
+
+ANTsPyX currently publishes wheels through Python 3.13, so the transform extra is not
+available on Python 3.14.
+
+
 If you want more control over your environment to ensure that every python dependency
 is optimized for tedana, 
 you can use a program like `conda`_ to create an environment specifically for ``tedana`` with:

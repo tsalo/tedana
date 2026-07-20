@@ -36,6 +36,7 @@ from tedana.config import (
     DEFAULT_N_ROBUST_RUNS,
     DEFAULT_SEED,
 )
+from tedana.reporting.figure_space import FigureSpace, validate_figure_options
 from tedana.selection.component_selector import ComponentSelector
 from tedana.workflows.parser_utils import (
     check_n_robust_runs_value,
@@ -138,6 +139,54 @@ def _get_parser():
         action="store_true",
         help="Force overwriting of files.",
         default=False,
+    )
+
+    figure_args = parser.add_argument_group("Figure Space")
+    figure_args.add_argument(
+        "--xfms",
+        dest="xfms",
+        nargs="+",
+        metavar="XFM",
+        type=lambda x: is_valid_file(parser, x),
+        help=(
+            "Transform(s) that map input data into the figure reference space. "
+            "Supply these in antsApplyTransforms order. Requires --reference. "
+            "Transforms are applied only to images used in report figures."
+        ),
+        default=None,
+    )
+    figure_args.add_argument(
+        "--reference",
+        dest="reference",
+        metavar="FILE",
+        type=lambda x: is_valid_file(parser, x),
+        help=(
+            "Three-dimensional reference image defining the target grid for report figures. "
+            "Requires --xfms."
+        ),
+        default=None,
+    )
+    figure_args.add_argument(
+        "--dseg",
+        dest="dseg",
+        metavar="FILE",
+        type=lambda x: is_valid_file(parser, x),
+        help=(
+            "Discrete segmentation used to group voxels in carpet plots. Must match the input "
+            "data space when --xfms is omitted and the --reference space when --xfms is used."
+        ),
+        default=None,
+    )
+    figure_args.add_argument(
+        "--dseg-tsv",
+        dest="dseg_tsv",
+        metavar="FILE",
+        type=lambda x: is_valid_file(parser, x),
+        help=(
+            "TSV file mapping dseg values to carpet-plot labels. Requires --dseg and columns "
+            "named 'index' and 'name'."
+        ),
+        default=None,
     )
 
     masking_args = parser.add_argument_group("Temporal and Spatial Masking")
@@ -457,6 +506,10 @@ def tedana_workflow(
     gscontrol=None,
     no_reports=False,
     png_cmap="coolwarm",
+    xfms=None,
+    reference=None,
+    dseg=None,
+    dseg_tsv=None,
     verbose=False,
     low_mem=False,
     debug=False,
@@ -581,6 +634,17 @@ def tedana_workflow(
     png_cmap : obj:'str', optional
         Name of a matplotlib colormap to be used when generating figures.
         Cannot be used with --no-png. Default is 'coolwarm'.
+    xfms : :obj:`list` of :obj:`str` or None, optional
+        Transform files mapping input data into the reference space for report figures.
+        Must be supplied with ``reference`` and in antsApplyTransforms order.
+    reference : :obj:`str` or None, optional
+        Three-dimensional target image for transformed report figures. Must be supplied
+        with ``xfms``.
+    dseg : :obj:`str` or None, optional
+        Discrete segmentation used to group carpet-plot voxels. It must match the input
+        data space when no transforms are supplied, or the reference space otherwise.
+    dseg_tsv : :obj:`str` or None, optional
+        Segmentation label table with ``index`` and ``name`` columns. Requires ``dseg``.
     verbose : :obj:`bool`, optional
         Generate intermediate and additional files. Default is False.
     low_mem : :obj:`bool`, optional
@@ -617,6 +681,14 @@ def tedana_workflow(
     ----------
     .. footbibliography::
     """
+    validate_figure_options(
+        xfms=xfms,
+        reference=reference,
+        dseg=dseg,
+        dseg_tsv=dseg_tsv,
+        check_dependency=not no_reports,
+    )
+
     out_dir = op.abspath(out_dir)
     if not op.isdir(out_dir):
         os.mkdir(out_dir)
@@ -679,6 +751,15 @@ def tedana_workflow(
 
     # Initialize OutputGenerator with reference image
     ref_img = io.load_ref_img(data=data, n_echos=n_echos)
+    figure_space = None
+    if not no_reports:
+        figure_space = FigureSpace(
+            native_reference=ref_img,
+            xfms=xfms,
+            reference=reference,
+            dseg=dseg,
+            dseg_tsv=dseg_tsv,
+        )
     io_generator = io.OutputGenerator(
         ref_img,
         convention=convention,
@@ -737,6 +818,8 @@ def tedana_workflow(
 
     # Save system info to json
     info_dict = utils.get_system_version_info()
+    if figure_space is not None and figure_space.ants_version is not None:
+        info_dict["Python_Libraries"]["antspyx"] = figure_space.ants_version
     info_dict["Command"] = tedana_command
 
     n_samp, n_echos, n_vols = data_cat.shape
@@ -1128,6 +1211,13 @@ def tedana_workflow(
         "\\citep{dice1945measures,sorensen1948method}."
     )
 
+    if figure_space is not None and figure_space.enabled:
+        RepLGR.info(
+            "Images used in report figures were transformed to the supplied reference space "
+            "with ANTsPyX \\citep{avants2011reproducible}. Workflow output images were not "
+            "transformed."
+        )
+
     with open(repname) as fo:
         report = [line.rstrip() for line in fo.readlines()]
         report = " ".join(report)
@@ -1157,6 +1247,7 @@ def tedana_workflow(
         reporting.static_figures.plot_adaptive_mask(
             optcom=data_optcom,
             io_generator=io_generator,
+            figure_space=figure_space,
         )
         reporting.static_figures.carpet_plot(
             optcom_ts=data_optcom,
@@ -1166,6 +1257,7 @@ def tedana_workflow(
             mask=mask_denoise_img,
             io_generator=io_generator,
             gscontrol=gscontrol,
+            figure_space=figure_space,
         )
         reporting.static_figures.comp_figures(
             data_optcom,
@@ -1173,18 +1265,22 @@ def tedana_workflow(
             mixing=mixing_orig,
             io_generator=io_generator,
             png_cmap=png_cmap,
+            figure_space=figure_space,
         )
         reporting.static_figures.plot_t2star_and_s0(
             io_generator=io_generator,
             mask=mask_denoise_img,
+            figure_space=figure_space,
         )
         if t2smap is None:
             reporting.static_figures.plot_rmse(
                 io_generator=io_generator,
+                figure_space=figure_space,
             )
             if fittype == "curvefit" and verbose:
                 reporting.static_figures.plot_decay_variance(
                     io_generator=io_generator,
+                    figure_space=figure_space,
                 )
 
         if gscontrol:
@@ -1192,6 +1288,7 @@ def tedana_workflow(
                 io_generator=io_generator,
                 gscontrol=gscontrol,
                 png_cmap=png_cmap,
+                figure_space=figure_space,
             )
 
         if external_regressors is not None:
@@ -1248,8 +1345,19 @@ def _main(argv=None):
         tedana_command = "tedana " + " ".join(argv)
     else:
         tedana_command = "tedana " + " ".join(sys.argv[1:])
-    options = _get_parser().parse_args(argv)
+    parser = _get_parser()
+    options = parser.parse_args(argv)
     kwargs = vars(options)
+    try:
+        validate_figure_options(
+            xfms=kwargs.get("xfms"),
+            reference=kwargs.get("reference"),
+            dseg=kwargs.get("dseg"),
+            dseg_tsv=kwargs.get("dseg_tsv"),
+            check_dependency=not kwargs.get("no_reports", False),
+        )
+    except (FileNotFoundError, ImportError, ValueError) as exc:
+        parser.error(str(exc))
     n_threads = kwargs.get("n_threads", 1)
     n_threads = None if n_threads == -1 else n_threads
     with threadpool_limits(limits=n_threads, user_api=None):

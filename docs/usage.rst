@@ -51,6 +51,34 @@ https://tedana.readthedocs.io/en/latest/outputs.html
     To examine regions-of-interest with multi-echo data, apply masks after TE
     Dependent ANAlysis.
 
+Transforming report figures
+===========================
+
+The ``--xfms`` and ``--reference`` options can transform spatial images used in
+the HTML report into a common reference space. These options do not transform
+any NIfTI output from the workflow. Transform files must be supplied in
+``antsApplyTransforms`` order and require the ``transforms`` installation extra.
+
+For example, fMRIPrep's BOLD-to-T1w affine and T1w-to-template nonlinear transform
+can be chained as follows:
+
+.. code-block:: bash
+
+  tedana \
+      -d echo-1_bold.nii.gz echo-2_bold.nii.gz echo-3_bold.nii.gz \
+      -e 0.015 0.039 0.063 \
+      --xfms from-T1w_to-MNI152NLin6Asym_mode-image_xfm.h5 \
+             from-boldref_to-T1w_mode-image_xfm.txt \
+      --reference tpl-MNI152NLin6Asym_res-02_T1w.nii.gz \
+      --dseg tpl-MNI152NLin6Asym_res-02_desc-carpet_dseg.nii.gz \
+      --dseg-tsv tpl-MNI152NLin6Asym_res-02_desc-carpet_dseg.tsv
+
+Without transforms, ``--dseg`` must match the input data space. With transforms,
+it must match ``--reference``. A ``--dseg-tsv`` file requires ``--dseg`` and must
+contain unique ``index`` and ``name`` columns. The segmentation groups carpet-plot
+voxels and the table supplies their displayed labels.
+
+
 .. _ica_reclassify cli:
 
 ***********************************
