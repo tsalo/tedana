@@ -47,6 +47,58 @@
         "orig": "ts_OC",
         "bidsv1.5.0": "desc-optcom_bold"
     },
+    "complex combined real img": {
+        "orig": "ts_OC_real",
+        "bidsv1.5.0": "part-real_desc-optcom_bold"
+    },
+    "complex combined real json": {
+        "orig": "ts_OC_real",
+        "bidsv1.5.0": "part-real_desc-optcom_bold"
+    },
+    "complex combined imag img": {
+        "orig": "ts_OC_imag",
+        "bidsv1.5.0": "part-imag_desc-optcom_bold"
+    },
+    "complex combined imag json": {
+        "orig": "ts_OC_imag",
+        "bidsv1.5.0": "part-imag_desc-optcom_bold"
+    },
+    "complex combined mag img": {
+        "orig": "ts_OC_mag",
+        "bidsv1.5.0": "part-mag_desc-optcom_bold"
+    },
+    "complex combined mag json": {
+        "orig": "ts_OC_mag",
+        "bidsv1.5.0": "part-mag_desc-optcom_bold"
+    },
+    "complex combined phase img": {
+        "orig": "ts_OC_phase",
+        "bidsv1.5.0": "part-phase_desc-optcom_bold"
+    },
+    "complex combined phase json": {
+        "orig": "ts_OC_phase",
+        "bidsv1.5.0": "part-phase_desc-optcom_bold"
+    },
+    "optcom weights img": {
+        "orig": "optcom_weights",
+        "bidsv1.5.0": "desc-optcomWeights_statmap"
+    },
+    "phase alignment img": {
+        "orig": "phase_alignment",
+        "bidsv1.5.0": "desc-phaseAlignment_statmap"
+    },
+    "phase alignment json": {
+        "orig": "phase_alignment",
+        "bidsv1.5.0": "desc-phaseAlignment_statmap"
+    },
+    "phase coherence img": {
+        "orig": "phase_coherence",
+        "bidsv1.5.0": "desc-phaseCoherence_statmap"
+    },
+    "phase alignment failures img": {
+        "orig": "phase_alignment_failures",
+        "bidsv1.5.0": "desc-phaseAlignmentFailures_mask"
+    },
     "rmse img": {
         "orig": "rmse",
         "bidsv1.5.0": "desc-rmse_statmap"

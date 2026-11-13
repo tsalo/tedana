@@ -506,3 +506,188 @@ def test_t2smap_interpolation_warns_for_loglin(tmp_path, caplog):
         out_dir=str(tmp_path / "out"),
     )
     assert "interpolation will be skipped" in caplog.text
+
+
+def _make_offset_phase_files(
+    echo_files,
+    out_dir,
+    offsets=(2.0, -3.0, 3.1),
+    kind="wrapped",
+    suffix="",
+):
+    """Write phase NIfTIs with a spatially varying, echo-specific constant phase offset.
+
+    ``kind`` is "wrapped" (radians in [-pi, pi)), "unwrapped" (radians shifted by
+    multiples of 2 pi), or "scanner" (unscaled integers from -4096 to 4095).
+    """
+    phase_files = []
+    for i, f in enumerate(echo_files):
+        img = nb.load(f)
+        x = np.linspace(-1, 1, img.shape[0])[:, None, None, None]
+        phase = np.angle(np.exp(1j * (offsets[i] + x))) * np.ones(img.shape)
+        if kind == "unwrapped":
+            n_wraps = np.arange(img.shape[1])[None, :, None, None] % 3
+            phase = phase + 2 * np.pi * n_wraps
+        elif kind == "scanner":
+            phase = np.round(phase * 4096 / np.pi)
+
+        path = op.join(out_dir, f"offset_phase{i + 1}{suffix}.nii.gz")
+        nb.Nifti1Image(phase.astype(np.float32), img.affine).to_filename(path)
+        phase_files.append(path)
+    return phase_files
+
+
+COMPLEX_PARTS = ("real", "imag", "mag", "phase")
+
+
+@pytest.mark.parametrize(
+    "fittype, combmode",
+    [("nlls", "t2s-complex"), ("loglin", "t2s-complex"), ("loglin", "paid-complex")],
+)
+def test_t2smap_complex_combination(tmp_path, fittype, combmode):
+    """Complex combination writes consistent real, imaginary, magnitude and phase parts."""
+    data_dir = get_test_data_path()
+    echo_files = [op.join(data_dir, f"echo{i + 1}.nii.gz") for i in range(3)]
+    mask = _make_small_mask(op.join(data_dir, "mask.nii.gz"), str(tmp_path))
+    out_dir = tmp_path / "out"
+    workflows.t2smap_workflow(
+        data=echo_files,
+        tes=[14.5, 38.5, 62.5],
+        phase=_make_offset_phase_files(echo_files, str(tmp_path)),
+        mask=mask,
+        fittype=fittype,
+        combmode=combmode,
+        exclude="0,3",
+        out_dir=str(out_dir),
+        verbose=True,
+    )
+    assert not op.exists(op.join(out_dir, "desc-optcom_bold.nii.gz"))
+    parts = {
+        part: nb.load(op.join(out_dir, f"part-{part}_desc-optcom_bold.nii.gz")).get_fdata()
+        for part in COMPLEX_PARTS
+    }
+    n_vols = nb.load(echo_files[0]).shape[-1]
+    assert parts["real"].shape[-1] == n_vols
+    assert np.allclose(np.hypot(parts["real"], parts["imag"]), parts["mag"], atol=1e-2)
+    assert np.allclose(np.arctan2(parts["imag"], parts["real"]), parts["phase"], atol=1e-4)
+    for part in COMPLEX_PARTS:
+        with open(op.join(out_dir, f"part-{part}_desc-optcom_bold.json")) as fo:
+            metadata = json.load(fo)
+        assert metadata["CombinationMethod"] == combmode
+        assert metadata["ExcludedVolumesFromEstimation"] == [0, 3]
+        assert ("T2starSource" in metadata) == (combmode == "t2s-complex")
+        if part == "phase":
+            assert metadata["Units"] == "rad"
+
+    # Verbose diagnostics have one volume per echo.
+    for name in (
+        "desc-optcomWeights_statmap",
+        "desc-phaseAlignment_statmap",
+        "desc-phaseCoherence_statmap",
+        "desc-phaseAlignmentFailures_mask",
+    ):
+        assert nb.load(op.join(out_dir, f"{name}.nii.gz")).shape[-1] == 3
+
+    weights = nb.load(op.join(out_dir, "desc-optcomWeights_statmap.nii.gz")).get_fdata()
+    adaptive = nb.load(op.join(out_dir, "desc-adaptiveGoodSignal_mask.nii.gz")).get_fdata()
+    assert np.allclose(weights[adaptive > 0].sum(axis=-1), 1, atol=1e-5)
+
+
+@pytest.mark.parametrize("combmode", ["t2s", "paid"])
+def test_t2smap_complex_constant_phase_matches_magnitude(tmp_path, combmode):
+    """With constant phase offsets, the complex magnitude equals the magnitude combination."""
+    data_dir = get_test_data_path()
+    echo_files = [op.join(data_dir, f"echo{i + 1}.nii.gz") for i in range(3)]
+    mask = _make_small_mask(op.join(data_dir, "mask.nii.gz"), str(tmp_path))
+    kwargs = {"data": echo_files, "tes": [14.5, 38.5, 62.5], "mask": mask, "combmode": combmode}
+    workflows.t2smap_workflow(out_dir=str(tmp_path / "mag"), **kwargs)
+    workflows.t2smap_workflow(
+        out_dir=str(tmp_path / "complex"),
+        **{**kwargs, "combmode": f"{combmode}-complex"},
+        phase=_make_offset_phase_files(echo_files, str(tmp_path)),
+    )
+    expected = nb.load(op.join(tmp_path, "mag", "desc-optcom_bold.nii.gz")).get_fdata()
+    mag = nb.load(op.join(tmp_path, "complex", "part-mag_desc-optcom_bold.nii.gz")).get_fdata()
+    imag = nb.load(op.join(tmp_path, "complex", "part-imag_desc-optcom_bold.nii.gz")).get_fdata()
+    assert np.allclose(mag, expected, rtol=1e-4, atol=1e-2)
+    assert np.allclose(imag, 0, atol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"combmode": "t2s-complex"}, "requires phase images"),
+        ({"combmode": "paid-complex", "phase": "OFFSET", "fitmode": "ts"}, "fitmode='ts'"),
+        ({"combmode": "paid-complex", "phase": "SCANNER"}, "unscaled scanner phase"),
+        ({"fittype": "nlls", "phase": "SCANNER"}, "unscaled scanner phase"),
+        ({"combmode": "paid-complex", "phase": "SHORT"}, "does not match data shape"),
+        ({"combmode": "t2s", "phase": "OFFSET"}, "only used with"),
+    ],
+)
+def test_t2smap_complex_validation(tmp_path, kwargs, match):
+    """Complex combination inputs are validated."""
+    data_dir = get_test_data_path()
+    echo_files = [op.join(data_dir, f"echo{i + 1}.nii.gz") for i in range(3)]
+    if "phase" in kwargs:
+        kwargs["phase"] = {
+            "OFFSET": lambda: _make_offset_phase_files(echo_files, str(tmp_path)),
+            "SCANNER": lambda: _make_offset_phase_files(echo_files, str(tmp_path), kind="scanner"),
+            "SHORT": lambda: _write_phase_files(echo_files, str(tmp_path), n_vols=3),
+        }[kwargs["phase"]]()
+
+    with pytest.raises(ValueError, match=match):
+        workflows.t2smap_workflow(
+            data=echo_files,
+            tes=[14.5, 38.5, 62.5],
+            mask=_make_small_mask(op.join(data_dir, "mask.nii.gz"), str(tmp_path)),
+            out_dir=str(tmp_path / "out"),
+            **kwargs,
+        )
+
+
+def test_t2smap_complex_unwrapped_phase(tmp_path, caplog):
+    """Unwrapped radian phase is accepted with a warning and matches wrapped phase."""
+    data_dir = get_test_data_path()
+    echo_files = [op.join(data_dir, f"echo{i + 1}.nii.gz") for i in range(3)]
+    kwargs = {
+        "data": echo_files,
+        "tes": [14.5, 38.5, 62.5],
+        "mask": _make_small_mask(op.join(data_dir, "mask.nii.gz"), str(tmp_path)),
+        "combmode": "paid-complex",
+    }
+    workflows.t2smap_workflow(
+        phase=_make_offset_phase_files(echo_files, str(tmp_path)),
+        out_dir=str(tmp_path / "wrapped"),
+        **kwargs,
+    )
+    workflows.t2smap_workflow(
+        phase=_make_offset_phase_files(echo_files, str(tmp_path), kind="unwrapped", suffix="u"),
+        out_dir=str(tmp_path / "unwrapped"),
+        **kwargs,
+    )
+    assert "assumed to be unwrapped phase in radians" in caplog.text
+    for part in ("real", "imag"):
+        name = f"part-{part}_desc-optcom_bold.nii.gz"
+        wrapped = nb.load(op.join(tmp_path, "wrapped", name)).get_fdata()
+        unwrapped = nb.load(op.join(tmp_path, "unwrapped", name)).get_fdata()
+        assert np.allclose(wrapped, unwrapped, atol=1e-2)
+
+
+def test_t2smap_complex_cli(tmp_path):
+    """The complex combination modes are available from the command line."""
+    data_dir = get_test_data_path()
+    echo_files = [op.join(data_dir, f"echo{i + 1}.nii.gz") for i in range(3)]
+    phase_files = _make_offset_phase_files(echo_files, str(tmp_path))
+    out_dir = tmp_path / "out"
+    args = (
+        ["-d"]
+        + echo_files
+        + ["--phase"]
+        + phase_files
+        + ["-e", "14.5", "38.5", "62.5"]
+        + ["--mask", _make_small_mask(op.join(data_dir, "mask.nii.gz"), str(tmp_path))]
+        + ["--combmode", "paid-complex", "--out-dir", str(out_dir)]
+    )
+    t2smap_cli._main(args)
+    for part in COMPLEX_PARTS:
+        assert op.isfile(op.join(out_dir, f"part-{part}_desc-optcom_bold.nii.gz"))

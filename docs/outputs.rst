@@ -213,6 +213,59 @@ Key: Filename                                                                Con
 "phase0 json": part-phase_S0map.json                                         Sidecar for the S0 phase map, with ``"Units": "rad"``.
 ===========================================================================  =====================================================
 
+If ``combmode`` is "t2s-complex" or "paid-complex"
+--------------------------------------------------
+
+Only available in ``t2smap``, and requires phase images (``--phase``) in radians.
+The magnitude and phase are combined into complex-valued data, each voxel's echoes are
+rotated so that their temporal complex means are real (phase alignment), and the aligned
+echoes are averaged with the "t2s" (T2*-based) or "paid" (magnitude tSNR) weights.
+Volumes removed with ``exclude`` do not inform the phase alignment or the PAID weights,
+but they are retained in the combined data.
+The complex combination replaces ``desc-optcom_bold.nii.gz``.
+
+The combined phase is relative to each echo's temporal-mean phase, not the scanner's
+absolute phase, and it does not correspond to a single echo time.
+It preserves temporal phase fluctuations, but it should not replace echo-wise phase
+for field mapping or quantitative susceptibility mapping.
+The magnitude of the complex combination generally differs from the magnitude-only
+optimal combination, which averages the echo magnitudes.
+
+===========================================================================  =====================================================
+Key: Filename                                                                Content
+===========================================================================  =====================================================
+"complex combined real img": part-real_desc-optcom_bold.nii.gz               Real part of the complex optimally combined time
+                                                                             series.
+"complex combined imag img": part-imag_desc-optcom_bold.nii.gz               Imaginary part of the complex optimally combined
+                                                                             time series.
+"complex combined mag img": part-mag_desc-optcom_bold.nii.gz                 Magnitude of the complex optimally combined time
+                                                                             series.
+"complex combined phase img": part-phase_desc-optcom_bold.nii.gz             Phase of the complex optimally combined time series,
+                                                                             in radians.
+"complex combined <part> json": part-<part>_desc-optcom_bold.json            Sidecars describing the combination method, the
+                                                                             source of T2*, and the excluded volumes. The phase
+                                                                             sidecar has ``"Units": "rad"``.
+===========================================================================  =====================================================
+
+If ``verbose`` is set, the following diagnostic maps are also written, with one volume
+per echo.
+
+===========================================================================  =====================================================
+Key: Filename                                                                Content
+===========================================================================  =====================================================
+"optcom weights img": desc-optcomWeights_statmap.nii.gz                      Echo weights used for the complex combination.
+                                                                             They sum to one across the echoes used in each voxel.
+"phase alignment img": desc-phaseAlignment_statmap.nii.gz                    Phase of each echo's temporal complex mean, in
+                                                                             radians, which was removed before combination.
+"phase coherence img": desc-phaseCoherence_statmap.nii.gz                    Magnitude of each echo's temporal complex mean
+                                                                             divided by its mean magnitude, from 0 (incoherent
+                                                                             phase) to 1 (constant phase). A measure of
+                                                                             confidence in the phase alignment.
+"phase alignment failures img": desc-phaseAlignmentFailures_mask.nii.gz      Echoes whose temporal complex mean was (near) zero,
+                                                                             so their phase could not be aligned and no rotation
+                                                                             was applied.
+===========================================================================  =====================================================
+
 If ``tedort`` is True
 ---------------------
 

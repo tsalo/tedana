@@ -75,6 +75,8 @@ API
    :template: function.rst
 
    make_optcom
+   make_optcom_complex
+   align_complex_echoes
 
 
 .. _api_decomposition_ref:

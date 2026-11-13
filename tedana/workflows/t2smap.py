@@ -50,7 +50,8 @@ def _get_parser():
         type=lambda x: is_valid_file(parser, x),
         help=(
             "Phase images for each echo, in radians, in ascending echo order "
-            "matching -d. Required when --fittype is 'nlls'."
+            "matching -d. Required when --fittype is 'nlls' or --combmode is "
+            "'t2s-complex' or 'paid-complex'."
         ),
         default=None,
     )
@@ -192,8 +193,16 @@ def _get_parser():
     decay_args.add_argument(
         "--combmode",
         dest="combmode",
-        choices=["t2s", "paid"],
-        help='Combination scheme for TEs: "t2s" (Posse 1999), "paid" (Poser)',
+        choices=["t2s", "paid", "t2s-complex", "paid-complex"],
+        help=(
+            'Combination scheme for TEs: "t2s" (Posse 1999), "paid" (Poser). '
+            '"t2s-complex" and "paid-complex" combine complex-valued data built from the '
+            "magnitude (-d) and phase (--phase) images, after rotating each voxel's echoes "
+            "so that their temporal complex means are real (Mikl 2024), using the same "
+            "T2*-based or PAID weights. These modes require --phase and write the real, "
+            "imaginary, magnitude and phase parts of the combined data instead of the "
+            "magnitude-only optimal combination."
+        ),
         default="t2s",
     )
     decay_args.add_argument(
@@ -335,7 +344,8 @@ def t2smap_workflow(
         Method(s) by which to define the adaptive mask. Default is ["dropout"].
     phase : :obj:`list` of :obj:`str`, optional
         Phase images for each echo, in radians, in ascending echo order matching ``data``.
-        Required when ``fittype`` is ``'nlls'``. Default is None.
+        Required when ``fittype`` is ``'nlls'`` or ``combmode`` is ``'t2s-complex'``
+        or ``'paid-complex'``. Default is None.
     fittype : {'loglin', 'curvefit', 'nlls'}, optional
         Monoexponential fitting method.
         'loglin' means to use the the default linear fit to the log of
@@ -356,8 +366,17 @@ def t2smap_workflow(
         'varys0' (nlls only) shares R2*/frequency across timepoints while
         allowing complex S0 to vary per timepoint.
         Default is 'all'.
-    combmode : {'t2s', 'paid'}, optional
+    combmode : {'t2s', 'paid', 't2s-complex', 'paid-complex'}, optional
         Combination scheme for TEs: 't2s' (Posse 1999, default), 'paid' (Poser).
+        't2s-complex' and 'paid-complex' phase-align the complex-valued data built from
+        ``data`` and ``phase`` and combine them with the same weights
+        (see :func:`tedana.combine.make_optcom_complex`).
+        They require ``phase`` and voxel-wise T2* (``fitmode`` 'all' or 'varys0').
+        With ``fittype='nlls'``, 't2s-complex' uses the T2* from the complex fit;
+        otherwise it uses the T2* fit to the magnitude data.
+        The combined phase is relative to each echo's temporal-mean phase and has no
+        single echo time, so it should not replace echo-wise phase for field mapping
+        or susceptibility mapping.
     verbose : :obj:`bool`, optional
         Generate intermediate and additional files. Default is False.
     overwrite : :obj:`bool`, optional
@@ -405,7 +424,12 @@ def t2smap_workflow(
                                   good data, the full map uses the S0 estimate
                                   from the first two echos, while the limited map
                                   will have a NaN.
-    desc-optcom_bold.nii.gz       Optimally combined timeseries.
+    desc-optcom_bold.nii.gz       Optimally combined timeseries. Not written for
+                                  complex ``combmode`` options.
+    part-<real|imag|mag|phase>_   Real, imaginary, magnitude and phase (radians)
+    desc-optcom_bold.nii.gz       parts of the complex optimally combined
+                                  timeseries. Only written for complex
+                                  ``combmode`` options.
     ============================= =================================================
 
     References
@@ -451,10 +475,21 @@ def t2smap_workflow(
             "Please set fitmode='all' or remove the exclude argument."
         )
 
+    complex_combination = combmode in combine.COMPLEX_COMBMODES
     if fittype == "nlls" and phase is None:
         raise ValueError("fittype='nlls' requires phase images (--phase).")
-    if phase is not None and fittype != "nlls":
-        raise ValueError("phase images are only used with fittype='nlls'.")
+    if complex_combination and phase is None:
+        raise ValueError(f"combmode='{combmode}' requires phase images (--phase).")
+    if phase is not None and fittype != "nlls" and not complex_combination:
+        raise ValueError(
+            "phase images are only used with fittype='nlls' or "
+            "combmode='t2s-complex'/'paid-complex'."
+        )
+    if complex_combination and fitmode == "ts":
+        raise ValueError(
+            f"combmode='{combmode}' requires voxel-wise T2* estimates and does not support "
+            "fitmode='ts'. Please use fitmode='all' or 'varys0'."
+        )
     if fitmode == "varys0" and fittype != "nlls":
         raise ValueError("fitmode='varys0' is only valid with fittype='nlls'.")
 
@@ -497,7 +532,7 @@ def t2smap_workflow(
         data_cat = data_cat[..., dummy_scans:]
 
     phase_cat = None
-    if fittype == "nlls":
+    if phase is not None:
         LGR.info(f"Loading phase data: {[f for f in phase]}")
         phase_cat = io.load_data_nilearn(phase, mask_img=mask_img, n_echos=n_echos)
         if dummy_scans > 0:
@@ -506,10 +541,11 @@ def t2smap_workflow(
             raise ValueError(
                 f"Phase shape {phase_cat.shape} does not match data shape {data_cat.shape}."
             )
+        _check_phase_radians(phase_cat)
 
     n_samp, n_echos, n_vols = data_cat.shape
     LGR.debug(f"Resulting data shape: {data_cat.shape}")
-    if combmode == "paid" and n_vols == 1:
+    if combmode in ("paid", "paid-complex") and n_vols == 1:
         raise ValueError("PAID combination requires more than one volume.")
 
     # Create mask for volumes to use based on exclude indices
@@ -572,14 +608,27 @@ def t2smap_workflow(
 
     LGR.info("Computing optimal combination")
     # optimally combine data, including the ignored volumes
-    data_optcom = combine.make_optcom(
-        data_cat,
-        tes,
-        masksum_denoise,
-        t2s=t2s_full,
-        combmode=combmode,
-    )
-    io_generator.save_file(data_optcom, "combined img")
+    if complex_combination:
+        _combine_complex(
+            data_cat=data_cat,
+            phase_cat=phase_cat,
+            tes=tes,
+            masksum_denoise=masksum_denoise,
+            t2s_full=t2s_full,
+            combmode=combmode,
+            fittype=fittype,
+            use_volumes=use_volumes,
+            io_generator=io_generator,
+        )
+    else:
+        data_optcom = combine.make_optcom(
+            data_cat,
+            tes,
+            masksum_denoise,
+            t2s=t2s_full,
+            combmode=combmode,
+        )
+        io_generator.save_file(data_optcom, "combined img")
 
     # Write out BIDS-compatible description file
     derivative_metadata = {
@@ -619,6 +668,172 @@ def t2smap_workflow(
     utils.log_newsletter_info()
 
     utils.teardown_loggers()
+
+
+def _check_phase_radians(phase_cat, tolerance=0.01):
+    r"""Check that phase data appear to be in radians.
+
+    Wrapped phase in radians spans at most :math:`2\pi`.
+    Phase spanning more than :math:`2\pi` is rejected if every value is an integer,
+    which indicates unscaled scanner phase (for example, integers from -4096 to 4095).
+    Otherwise, it is accepted as unwrapped or shifted radians, with a warning, since only
+    :math:`\exp(i\phi)` is used.
+
+    Parameters
+    ----------
+    phase_cat : (S x E x T) :obj:`numpy.ndarray`
+        Phase data.
+    tolerance : float, optional
+        Allowed excess beyond a :math:`2\pi` range. Default is 0.01.
+
+    Raises
+    ------
+    ValueError
+        If the phase data are not finite or appear to be unscaled scanner phase.
+    """
+    if not np.all(np.isfinite(phase_cat)):
+        raise ValueError("Phase data contain non-finite values.")
+
+    phase_min, phase_max = float(phase_cat.min()), float(phase_cat.max())
+    if phase_max - phase_min <= 2 * np.pi + tolerance:
+        return
+
+    if np.array_equal(phase_cat, np.round(phase_cat)):
+        raise ValueError(
+            f"Phase data are integers ranging from {phase_min:.4g} to {phase_max:.4g}, "
+            "which looks like unscaled scanner phase rather than radians. Please convert "
+            "the phase images to radians (e.g., [-pi, pi)) before running t2smap."
+        )
+
+    LGR.warning(
+        f"Phase data range from {phase_min:.4g} to {phase_max:.4g}, which spans more than "
+        "2*pi. They are assumed to be unwrapped phase in radians. If they are in other "
+        "units (e.g., degrees), please convert them to radians."
+    )
+
+
+def _combine_complex(
+    data_cat,
+    phase_cat,
+    tes,
+    masksum_denoise,
+    t2s_full,
+    combmode,
+    fittype,
+    use_volumes,
+    io_generator,
+):
+    """Optimally combine complex-valued data and write its outputs.
+
+    Parameters
+    ----------
+    data_cat, phase_cat : (S x E x T) :obj:`numpy.ndarray`
+        Magnitude and phase (radians) data.
+    tes : (E,) :obj:`list`
+        Echo times in seconds.
+    masksum_denoise : (S,) :obj:`numpy.ndarray`
+        Adaptive mask.
+    t2s_full : (S,) :obj:`numpy.ndarray`
+        Voxel-wise T2* estimates.
+    combmode : {"t2s-complex", "paid-complex"}
+        Complex combination method.
+    fittype : str
+        T2* fitting method, used to describe the T2* source.
+    use_volumes : (T,) :obj:`numpy.ndarray` of bool or None
+        Volumes used to estimate the phase reference and PAID weights.
+    io_generator : :obj:`tedana.io.OutputGenerator`
+        Output generator.
+    """
+    weighting = combine.COMPLEX_COMBMODES[combmode]
+    if weighting == "t2s":
+        if fittype == "nlls":
+            t2s_source = "complex monoexponential (nlls) fit to the magnitude and phase data"
+        else:
+            t2s_source = f"monoexponential ({fittype}) fit to the magnitude data"
+
+        LGR.info(f"Using T2* from the {t2s_source} for complex optimal combination")
+    else:
+        t2s_source = None
+
+    combined, diagnostics = combine.make_optcom_complex(
+        data_cat,
+        phase_cat,
+        tes,
+        masksum_denoise,
+        t2s=t2s_full if weighting == "t2s" else None,
+        combmode=combmode,
+        use_volumes=use_volumes,
+    )
+
+    n_vols = data_cat.shape[-1]
+    if use_volumes is None:
+        excluded = []
+    else:
+        excluded = np.where(~use_volumes)[0].tolist()
+        LGR.info(
+            f"Estimated phase references{' and PAID weights' if weighting == 'paid' else ''} "
+            f"from {int(use_volumes.sum())} of {n_vols} volumes; "
+            "excluded volumes are retained in the combined data."
+        )
+
+    common_metadata = {
+        "CombinationMethod": combmode,
+        "EchoWeighting": (
+            "T2*-based (Posse et al., 1999)"
+            if weighting == "t2s"
+            else "PAID, from magnitude tSNR (Poser et al., 2006)"
+        ),
+        "PhaseAlignment": (
+            "Each voxel's echo time series was rotated by the negative phase of its "
+            "temporal complex mean, so the temporal mean of each echo is real and "
+            "nonnegative. Undetermined (near-zero) temporal means were not rotated."
+        ),
+        "ExcludedVolumesFromEstimation": excluded,
+    }
+    if t2s_source is not None:
+        common_metadata["T2starSource"] = t2s_source
+
+    phase_note = (
+        "The phase is relative to each echo's temporal-mean phase, not the scanner's "
+        "absolute phase, and does not correspond to a single echo time. It should not "
+        "be used in place of echo-wise phase for field mapping or susceptibility mapping."
+    )
+    parts = {
+        "real": (combined.real, "Real part", {}),
+        "imag": (combined.imag, "Imaginary part", {}),
+        "mag": (np.abs(combined), "Magnitude", {}),
+        "phase": (np.angle(combined), "Phase", {"Units": "rad"}),
+    }
+    for part, (part_data, part_label, extra_metadata) in parts.items():
+        io_generator.save_file(part_data, f"complex combined {part} img")
+        metadata = {
+            "Description": (
+                f"{part_label} of the phase-aligned complex-valued optimally combined "
+                f"time series. {phase_note}"
+            ),
+            **extra_metadata,
+            **common_metadata,
+        }
+        io_generator.save_file(metadata, f"complex combined {part} json")
+
+    if io_generator.verbose:
+        io_generator.save_file(diagnostics["weights"], "optcom weights img")
+        io_generator.save_file(diagnostics["reference_phase"], "phase alignment img")
+        io_generator.save_file(
+            {
+                "Units": "rad",
+                "Description": (
+                    "Echo-wise phase of the temporal complex mean removed from each echo "
+                    "before complex optimal combination. Volumes correspond to echoes."
+                ),
+            },
+            "phase alignment json",
+        )
+        io_generator.save_file(diagnostics["coherence"], "phase coherence img")
+        io_generator.save_file(
+            diagnostics["failed"].astype(np.uint8),
+            "phase alignment failures img",
+        )
 
 
 def _main(argv=None):
